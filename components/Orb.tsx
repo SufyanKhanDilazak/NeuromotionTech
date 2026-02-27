@@ -312,9 +312,11 @@ export default function Orb({
      */
     const { style } = gl.canvas;
     style.position = "absolute";
-    style.inset    = "0";
-    style.width    = "100%";
-    style.height   = "100%";
+style.left = "50%";
+style.top = "50%";
+style.width = "100%";
+style.height = "100%";
+style.transform = "translate(-50%, -50%)";
     container.appendChild(gl.canvas);
 
     /* ── Initial background color Vec3 ── */
