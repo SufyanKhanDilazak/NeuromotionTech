@@ -299,18 +299,20 @@ export function Hero() {
         ════════════════════════════════════════════════════════════════ */}
         <div className="pointer-events-none absolute inset-0 z-0" aria-hidden="true">
 
-          {/* Mobile Orb — same position as original */}
-          <div className="absolute left-0 right-0 top-[30%] flex h-[600px] items-start justify-center pt-8 lg:hidden">
-            <div className="relative h-full w-full max-w-[500px]">
-              <Orb
-                hue={190}
-                hoverIntensity={1.5}
-                rotateOnHover={false}
-                forceHoverState={false}
-                backgroundColor="#ffffff"
-              />
-            </div>
-          </div>
+       {/* Mobile Orb — pushed further down */}
+<div className="absolute inset-0 lg:hidden pointer-events-none">
+  <div className="absolute left-1/2 top-[65%] -translate-x-1/2 -translate-y-1/2">
+    <div className="relative w-[190vw] aspect-square">
+      <Orb
+        hue={190}
+        hoverIntensity={1.5}
+        rotateOnHover={false}
+        forceHoverState={false}
+        backgroundColor="#ffffff"
+      />
+    </div>
+  </div>
+</div>
 
           {/* Desktop Orb — same position as original */}
           <div className="hidden lg:flex lg:h-full lg:w-full lg:items-center lg:justify-center">
