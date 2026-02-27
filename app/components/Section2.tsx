@@ -1,690 +1,856 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence, useInView, useMotionValue, useSpring } from 'framer-motion';
 import {
-  Star, Quote, BadgeCheck, ChevronLeft, ChevronRight,
-  X, ThumbsUp, Sparkles, TrendingUp, Award, Zap
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  memo,
+  MouseEvent,
+  CSSProperties,
+  ReactNode,
+} from "react";
 
-interface Review {
-  id: number;
-  name: string;
-  location: string;
-  rating: number;
-  text: string;
-  service: string;
-  date: string;
-  year: number;
-  verified: boolean;
-  initials: string;
-  color: string;
-  helpful: number;
+/* ─── Static data ─────────────────────────────────────────────────────────── */
+const CHART_BARS    = [28, 45, 32, 62, 40, 78, 55, 88, 65, 96, 72, 100] as const;
+const AVATAR_COLORS = ["#3dd6c8", "#a78bfa", "#60a5fa"] as const;
+const PULSE_SCALES  = [0.52, 0.70, 0.86] as const;
+
+const ACTIVITY = [
+  { name: "Neural API",  status: "Active",   dot: "#3dd6c8" },
+  { name: "Auth Module", status: "Deployed", dot: "#34d399" },
+  { name: "Analytics",   status: "Running",  dot: "#a78bfa" },
+] as const;
+
+const METRICS = [
+  { label: "Active Users", val: "12.4K", trend: "↑ 8%"  },
+  { label: "Conversion",   val: "6.8%",  trend: "↑ 1.2%" },
+] as const;
+
+/* ─── Keyframes ───────────────────────────────────────────────────────────── */
+const CSS = `
+*, *::before, *::after { box-sizing: border-box; }
+
+@keyframes nmt-float   { 0%,100%{transform:translateY(0)}  50%{transform:translateY(-12px)} }
+@keyframes nmt-pulse   { 0%,100%{opacity:.5;transform:translate(-50%,-50%) scale(1)} 50%{opacity:.15;transform:translate(-50%,-50%) scale(1.07)} }
+@keyframes nmt-scan    { 0%{top:-2px} 100%{top:100%} }
+@keyframes nmt-grid    { 0%{transform:translateY(0)} 100%{transform:translateY(50px)} }
+@keyframes nmt-dot     { 0%,100%{opacity:1} 50%{opacity:.2} }
+@keyframes nmt-shimmer { 0%{background-position:-200% center} 100%{background-position:200% center} }
+@keyframes nmt-right   { from{opacity:0;transform:translateX(-26px)} to{opacity:1;transform:translateX(0)} }
+@keyframes nmt-left    { from{opacity:0;transform:translateX(26px)}  to{opacity:1;transform:translateX(0)} }
+@keyframes nmt-badge   { from{opacity:0;transform:translateY(14px) scale(.96)} to{opacity:1;transform:translateY(0) scale(1)} }
+
+@keyframes nmt-aurora-1 {
+  0%,100% { transform: translate(0,0) scale(1); opacity: 0.55; }
+  33%     { transform: translate(60px,-40px) scale(1.08); opacity: 0.7; }
+  66%     { transform: translate(-30px,50px) scale(0.95); opacity: 0.45; }
 }
-
-const COLORS = [
-  'from-rose-500 to-pink-600',
-  'from-violet-600 to-indigo-600',
-  'from-blue-600 to-cyan-500',
-  'from-emerald-500 to-teal-600',
-  'from-amber-500 to-orange-500',
-  'from-fuchsia-600 to-purple-600',
-  'from-sky-500 to-blue-600',
-  'from-teal-500 to-emerald-600',
-  'from-orange-500 to-red-500',
-  'from-indigo-600 to-blue-500',
-  'from-lime-500 to-green-600',
-  'from-pink-500 to-rose-600',
-];
-
-const SERVICES = [
-  'Web Development','App Development','AI Automation','SEO Services',
-  'Social Media Marketing','UI/UX Design','Product Photography',
-  'Web Design','Branding','E-Commerce',
-];
-
-const SERVICE_ICONS: Record<string,string> = {
-  'Web Development':'💻','App Development':'📱','AI Automation':'🤖',
-  'SEO Services':'🔍','Social Media Marketing':'📣','UI/UX Design':'🎨',
-  'Product Photography':'📸','Web Design':'🖥️','Branding':'✨','E-Commerce':'🛒',
-};
-
-const NAMES_LOCS: [string,string][] = [
-  ['James Anderson','New York, USA'],['Emma Williams','Los Angeles, USA'],
-  ['Michael Johnson','Chicago, USA'],['Sophia Brown','Houston, USA'],
-  ['Lachlan Smith','Sydney, Australia'],['Matilda Jones','Melbourne, Australia'],
-  ['Omar Al-Rashid','Dubai, UAE'],['Fatima Al-Hassan','Abu Dhabi, UAE'],
-  ['Liam Davis','Phoenix, USA'],['Olivia Wilson','Philadelphia, USA'],
-  ['Angus Taylor','Brisbane, Australia'],['Zoe Brown','Perth, Australia'],
-  ['Ahmed Khalid','Riyadh, Saudi Arabia'],['Layla Mahmoud','Jeddah, Saudi Arabia'],
-  ['Noah Martinez','San Antonio, USA'],['Ava Taylor','San Diego, USA'],
-  ['Hamish Wilson','Adelaide, Australia'],['Ellie Thompson','Gold Coast, Australia'],
-  ['Khalid Al-Farsi','Doha, Qatar'],['Nour Ibrahim','Kuwait City, Kuwait'],
-  ['William Thomas','Dallas, USA'],['Isabella Jackson','Austin, USA'],
-  ['Callum White','Canberra, Australia'],['Chloe Martin','Newcastle, Australia'],
-  ['Yusuf Al-Qasim','Muscat, Oman'],['Amira Salem','Manama, Bahrain'],
-  ['Benjamin White','San Francisco, USA'],['Mia Harris','Seattle, USA'],
-  ['Archer Anderson','Geelong, Australia'],['Isla Harris','Hobart, Australia'],
-  ['Hassan Al-Amin','Beirut, Lebanon'],['Mariam Al-Zahrawi','Amman, Jordan'],
-  ['Elijah Thompson','Denver, USA'],['Charlotte Garcia','Boston, USA'],
-  ['Finn Robinson','Sydney, Australia'],['Ruby Walker','Melbourne, Australia'],
-  ['Ibrahim Nassar','Cairo, Egypt'],['Zainab Al-Sayed','Istanbul, Turkey'],
-  ['Lucas Martinez','Miami, USA'],['Amelia Robinson','Portland, USA'],
-  ['Darcy Scott','Brisbane, Australia'],['Ruby King','Adelaide, Australia'],
-  ['Ali Al-Mousa','Dubai, UAE'],['Hana Barakat','Riyadh, Saudi Arabia'],
-  ['Mason Clark','Nashville, USA'],['Harper Rodriguez','Las Vegas, USA'],
-  ['Flynn Mitchell','Perth, Australia'],['Mia Clarke','Hobart, Australia'],
-  ['Tariq Mansour','Doha, Qatar'],['Rania Al-Khatib','Kuwait City, Kuwait'],
-  ['Logan Lewis','Minneapolis, USA'],['Evelyn Lee','Atlanta, USA'],
-  ['Beau Cooper','Melbourne, Australia'],['Sienna Turner','Sydney, Australia'],
-  ['Samir Haddad','Beirut, Lebanon'],['Dina Yousef','Cairo, Egypt'],
-  ['Ethan Walker','Charlotte, USA'],['Abigail Hall','Columbus, USA'],
-  ['Hugo Campbell','Brisbane, Australia'],['Willow Collins','Adelaide, Australia'],
-  ['Kareem Al-Nasser','Muscat, Oman'],['Sara Khalil','Manama, Bahrain'],
-  ['Aiden Allen','Indianapolis, USA'],['Emily Young','San Jose, USA'],
-  ['Oscar Evans','Perth, Australia'],['Piper Edwards','Canberra, Australia'],
-  ['Faisal Al-Ghamdi','Jeddah, Saudi Arabia'],['Mona Saleh','Abu Dhabi, UAE'],
-  ['Carter Hernandez','Jacksonville, USA'],['Elizabeth King','Memphis, USA'],
-  ['Billy Stewart','Newcastle, Australia'],['Scarlett Hall','Gold Coast, Australia'],
-  ['Nasser Al-Otaibi','Riyadh, Saudi Arabia'],['Yasmin Farouk','Doha, Qatar'],
-  ['Owen Wright','Louisville, USA'],['Sofia Lopez','Baltimore, USA'],
-  ['Riley Hughes','Sydney, Australia'],['Evie Lewis','Melbourne, Australia'],
-  ['Ziad Hamdan','Beirut, Lebanon'],['Lina Abu-Ali','Amman, Jordan'],
-  ['Dylan Hill','Milwaukee, USA'],['Victoria Scott','Albuquerque, USA'],
-  ['Jasper Moore','Brisbane, Australia'],['Freya Clarke','Perth, Australia'],
-  ['Rami Al-Haddad','Dubai, UAE'],['Nadia Kassem','Kuwait City, Kuwait'],
-  ['Ryan Green','Tucson, USA'],['Grace Adams','Fresno, USA'],
-  ['Cooper Ward','Melbourne, Australia'],['Paige Murray','Adelaide, Australia'],
-  ['Walid Chaaban','Beirut, Lebanon'],['Rana Al-Masri','Cairo, Egypt'],
-  ['Jackson Baker','Sacramento, USA'],['Chloe Nelson','Mesa, USA'],
-  ['Brodie Price','Sydney, Australia'],['Abbey Bell','Brisbane, Australia'],
-  ['Sami Jaber','Amman, Jordan'],['Maya Srour','Doha, Qatar'],
-  ['Sebastian Carter','Kansas City, USA'],['Riley Mitchell','Omaha, USA'],
-  ['Ryder Foster','Perth, Australia'],['Taylah Cole','Gold Coast, Australia'],
-  ['Adel Makhoul','Beirut, Lebanon'],['Hiba Khoury','Muscat, Oman'],
-  ['Jack Thompson','Denver, USA'],['Luna Ramirez','Miami, USA'],
-  ['Declan Murray','Melbourne, Australia'],['Poppy Harrison','Sydney, Australia'],
-  ['Yousef Al-Ahmad','Riyadh, Saudi Arabia'],['Dana Al-Rasheed','Dubai, UAE'],
-  ['Tyler Morgan','Seattle, USA'],['Zara Collins','Austin, USA'],
-  ['Kieran Walsh','Chicago, USA'],['Stella Bennett','Boston, USA'],
-  ['Hamza Al-Turki','Jeddah, Saudi Arabia'],['Reem Al-Otaibi','Kuwait City, Kuwait'],
-  ['Connor Hughes','San Francisco, USA'],['Isla Cameron','Edinburgh, UK'],
-  ['Tariq Salim','Muscat, Oman'],['Nadia Barakat','Beirut, Lebanon'],
-];
-
-const TEXTS = [
-  "Absolutely transformed our online presence. Revenue jumped 43% in the first quarter after launch. The attention to detail and strategic thinking set them apart from every agency we tried before.",
-  "Incredible work from start to finish. Communication was flawless, every milestone hit on schedule, and the final product exceeded every expectation we had going into the project.",
-  "The best digital partner we have ever worked with. They understood our vision from day one and executed with precision. Our competitors have been asking who built our platform.",
-  "From rough concept to polished launch in record time, zero quality sacrificed. Our conversion rate climbed 38% within six weeks and has continued growing every month since.",
-  "App downloads tripled in the first month. The UX is so intuitive that our customer support tickets dropped by half. Genuinely outstanding development work across the board.",
-  "We jumped from page 6 to the top 3 positions for every primary keyword inside three months. The organic traffic growth has been nothing short of extraordinary.",
-  "Social media campaigns generated more qualified leads in one quarter than the previous two years combined. Every piece of content felt authentic and precisely targeted.",
-  "Professional, creative, and technically brilliant. They challenged our assumptions in the best way and delivered something far beyond what we originally envisioned.",
-  "The product photography completely transformed our e-commerce listings. Conversion rate improved 34% overnight. The images are simply world class and tell our brand story perfectly.",
-  "The AI automation saved us 25 hours of manual work every single week. The system learns and improves over time. Implementation was smooth and the ROI was immediate and measurable.",
-  "Best business investment we made this year by a wide margin. The ROI continues to compound every month and our team wonders how we ever operated without their work.",
-  "The UI/UX redesign elevated our brand to an entirely different tier. Enterprise clients have specifically cited our platform design as a reason for choosing us over competitors.",
-  "Delivered on time, on budget, and with a quality that made our whole team proud. They are the only agency we have worked with that genuinely thinks like a business partner.",
-  "Search rankings have never been stronger. Quality organic traffic keeps growing months after the initial campaign. Our cost per acquisition dropped by 60% as a result.",
-  "The mobile app earned 4.9 stars on both stores within its first month. User reviews specifically call out the smooth experience. This is what great software feels like.",
-  "Genuinely talented people who care deeply about client outcomes. Every suggestion improved the final product in a meaningful, measurable way. We could not be happier.",
-  "Transformed our rough wireframes into a high-converting, blazing-fast website. The technical architecture is solid and scalable. A truly exceptional team to work with.",
-  "Fantastic from discovery right through to delivery. Every milestone was celebrated together and the quality just kept getting better at each stage of the engagement.",
-  "Social following grew 340% in six months. Engagement is through the roof. The content strategy resonates perfectly with our audience and keeps improving every month.",
-  "The automation workflows have revolutionized daily operations. Tasks that took hours now happen instantly and accurately. We cannot imagine going back to the old way.",
-  "The photography session produced images we are still using three years later. They have a rare ability to capture the soul of a product, not just its surface appearance.",
-  "Beautiful fast website, exceptional search rankings, and consistent qualified leads flowing to the team every day. This is what true digital partnership looks like.",
-  "They brought strategic ideas we would never have conceived ourselves. Creative minds who constantly push beyond the brief. Every project with them raises the bar further.",
-  "Every single deliverable was pixel-perfect and strategically sound. The care and craftsmanship poured into our project was palpable from the very first discovery call.",
-  "The brand identity work gave us a powerful, cohesive voice. Our audience instantly connects with it and our team has never felt more confident presenting the company.",
-  "Communication throughout was exemplary. We always knew exactly where things stood, what was coming next, and why every decision was made. Refreshingly transparent.",
-  "PageSpeed score of 99. Bounce rate dropped 40%. Technical SEO overhaul was comprehensive and the results were immediate. The fastest website in our entire industry.",
-  "They invested real time understanding our business model before touching any tool. That strategic foundation made every subsequent decision smarter and more effective.",
-  "The e-commerce platform handled record Black Friday traffic without a single hiccup. Zero downtime, perfect performance. Our operations team was genuinely astonished.",
-  "Creative, deeply knowledgeable, and endlessly collaborative. Every recommendation improved the final product measurably. This is the partnership every brand deserves.",
-  "The team is an absolute pleasure to work with. Results-focused, proactive, and genuinely invested in our growth. Project came in ahead of schedule and under budget.",
-  "Simply outstanding across every dimension. They took our outdated digital presence and rebuilt it into a modern, high-converting platform that drives real business growth.",
-];
-
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const HELPFUL = [3,7,12,18,24,31,8,15,22,29,5,11,17,27,35,9,14,21,28,6,13,19,25,32,4,10,16,23,30,2,20,26,38,42];
-
-function makeDate(i: number): { date: string; year: number } {
-  let year: number;
-  if (i < 80) year = 2023;
-  else if (i < 160) year = 2024;
-  else if (i < 300) year = 2025;
-  else year = 2026;
-  const m = MONTHS[i % 12];
-  const d = (i % 28) + 1;
-  return { date: `${m} ${d}, ${year}`, year };
+@keyframes nmt-aurora-2 {
+  0%,100% { transform: translate(0,0) scale(1); opacity: 0.45; }
+  40%     { transform: translate(-80px,30px) scale(1.12); opacity: 0.6; }
+  70%     { transform: translate(40px,-60px) scale(0.9); opacity: 0.35; }
 }
-
-function generateReviews(): Review[] {
-  const out: Review[] = [];
-  for (let i = 0; i < 420; i++) {
-    const [name, location] = NAMES_LOCS[i % NAMES_LOCS.length];
-    const parts = name.split(' ');
-    const initials = parts.map((p: string) => p[0]).join('').replace(/[^A-Za-z]/g,'').slice(0,2).toUpperCase();
-    const { date, year } = makeDate(i);
-    out.push({
-      id: i + 1, name, location,
-      rating: i % 11 === 0 ? 4 : 5,
-      text: TEXTS[i % TEXTS.length],
-      service: SERVICES[i % SERVICES.length],
-      date, year,
-      verified: i % 5 !== 0,
-      initials: initials || name.slice(0,2).toUpperCase(),
-      color: COLORS[i % COLORS.length],
-      helpful: HELPFUL[i % HELPFUL.length],
-    });
-  }
-  return out;
+@keyframes nmt-aurora-3 {
+  0%,100% { transform: translate(0,0) scale(1); opacity: 0.35; }
+  50%     { transform: translate(50px,70px) scale(1.06); opacity: 0.5; }
 }
+`;
 
-const ALL = generateReviews();
-const PER_PAGE = 9;
+/* ─── Phone SVG dims ──────────────────────────────────────────────────────── */
+const W = 433, H = 882, R = 55;
+const SCREEN_T  = `${(21 / H) * 100}%`;
+const SCREEN_L  = `${(21 / W) * 100}%`;
+const SCREEN_W  = `${((W - 42) / W) * 100}%`;
+const SCREEN_H  = `${((H - 42) / H) * 100}%`;
+const SCREEN_BR = `${(R / W) * 200}%`;
 
-/* ── Stars ── */
-function Stars({ n, size = 3 }: { n: number; size?: number }) {
-  const s = size === 3 ? 'w-3 h-3' : size === 3.5 ? 'w-3.5 h-3.5' : 'w-4 h-4';
+/* ─── AppScreen ───────────────────────────────────────────────────────────── */
+const AppScreen = memo(function AppScreen() {
   return (
-    <div className="flex gap-0.5">
-      {[1,2,3,4,5].map(i => (
-        <Star key={i} className={`${s} ${i <= n ? 'fill-amber-400 text-amber-400' : 'fill-white/10 text-white/10'}`} />
-      ))}
+    <div style={SC.screen}>
+      <div style={SC.grid} aria-hidden />
+
+      <div style={SC.statusBar}>
+        <span>9:41</span>
+        <span style={{ letterSpacing: 1 }}>●●● ᯤ ■</span>
+      </div>
+
+      <div style={{ padding: "12px 17px 0", position: "relative", zIndex: 1 }}>
+        <div style={SC.appRow}>
+          <div>
+            <div style={SC.appLabel}>Dashboard</div>
+            <div style={SC.appTitle}>Overview</div>
+          </div>
+          <div style={SC.appIcon}>
+            <div style={SC.appIconInner} />
+          </div>
+        </div>
+
+        <div style={SC.card}>
+          <div style={SC.cardLabel}>Monthly Revenue</div>
+          <div style={SC.cardValue}>$48,291</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={SC.badge}>↑ 23.4%</div>
+            <span style={SC.cardSub}>vs last month</span>
+          </div>
+          <div style={SC.chartRow}>
+            {CHART_BARS.map((h, i) => (
+              <div key={i} style={{
+                ...SC.bar,
+                height: `${h}%`,
+                background: i === CHART_BARS.length - 1
+                  ? "linear-gradient(to top,#3dd6c8,#257ca3)"
+                  : "rgba(37,124,163,0.22)",
+              }} />
+            ))}
+          </div>
+        </div>
+
+        <div style={SC.metricsRow}>
+          {METRICS.map((m) => (
+            <div key={m.label} style={SC.metricCard}>
+              <div style={SC.metricLabel}>{m.label}</div>
+              <div style={SC.metricVal}>{m.val}</div>
+              <div style={SC.metricTrend}>{m.trend}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={SC.activity}>
+          <div style={SC.activityHead}>Recent Activity</div>
+          {ACTIVITY.map((a) => (
+            <div key={a.name} style={SC.activityRow}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ ...SC.dot, background: a.dot, boxShadow: `0 0 6px ${a.dot}` }} />
+                <span style={SC.activityName}>{a.name}</span>
+              </div>
+              <span style={SC.activityStatus}>{a.status}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={SC.bottomNav} aria-hidden>
+        {(["⬡", "◈", "◎", "⊙"] as const).map((icon, i) => (
+          <div key={i} style={{
+            fontSize: 17, opacity: i === 0 ? 1 : 0.3,
+            color: i === 0 ? "#3dd6c8" : "white",
+            filter: i === 0 ? "drop-shadow(0 0 5px #3dd6c8)" : "none",
+          }}>{icon}</div>
+        ))}
+      </div>
     </div>
   );
+});
+
+/* ─── PhoneFrame ──────────────────────────────────────────────────────────── */
+const PhoneFrame = memo(function PhoneFrame({ hovered }: { hovered: boolean }) {
+  return (
+    <div style={{ position: "relative", width: "100%", willChange: "transform" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}
+        xmlns="http://www.w3.org/2000/svg" aria-hidden>
+        <defs>
+          <linearGradient id="nmt-ti" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%"   stopColor="#e2e2e6" />
+            <stop offset="20%"  stopColor="#efeff3" />
+            <stop offset="52%"  stopColor="#f5f5f9" />
+            <stop offset="80%"  stopColor="#cccccf" />
+            <stop offset="100%" stopColor="#a5a5a8" />
+          </linearGradient>
+          <linearGradient id="nmt-sl" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stopColor="#7a7a7e" />
+            <stop offset="100%" stopColor="#b8b8bc" />
+          </linearGradient>
+          <linearGradient id="nmt-sr" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stopColor="#b8b8bc" />
+            <stop offset="100%" stopColor="#7a7a7e" />
+          </linearGradient>
+          <radialGradient id="nmt-glow" cx="50%" cy="0%" r="75%">
+            <stop offset="0%"   stopColor="rgba(37,124,163,0.09)" />
+            <stop offset="100%" stopColor="transparent" />
+          </radialGradient>
+          <clipPath id="nmt-clip">
+            <rect x="21" y="21" width={W-42} height={H-42} rx={R} ry={R} />
+          </clipPath>
+        </defs>
+
+        <rect x="1" y="1" width={W-2} height={H-2} rx="76"
+          fill="url(#nmt-ti)" stroke="rgba(255,255,255,0.48)" strokeWidth="0.5" />
+
+        <rect x="-1" y="196" width="5" height="50"  rx="2.5" fill="url(#nmt-sl)" />
+        <rect x="-1" y="268" width="5" height="84"  rx="2.5" fill="url(#nmt-sl)" />
+        <rect x="-1" y="374" width="5" height="84"  rx="2.5" fill="url(#nmt-sl)" />
+        <rect x={W-4} y="246" width="5" height="128" rx="2.5" fill="url(#nmt-sr)" />
+
+        <rect x="18" y="18" width={W-36} height={H-36} rx="60" fill="#020c18" />
+        <rect x="21" y="21" width={W-42} height={H-42} rx={R}
+          fill="#010810" clipPath="url(#nmt-clip)" />
+        <rect x="21" y="21" width={W-42} height={H-42} rx={R}
+          fill="url(#nmt-glow)" clipPath="url(#nmt-clip)" />
+
+        <rect x={(W/2)-64} y="26" width="129" height="44" rx="22" fill="#000" />
+        <circle cx={(W/2)+33} cy="48" r="9"   fill="#050505" />
+        <circle cx={(W/2)+33} cy="48" r="6.2" fill="#0d0d0f" />
+        <circle cx={(W/2)+33} cy="48" r="4"   fill="#13181f" />
+        <circle cx={(W/2)+31} cy="46" r="1.3" fill="rgba(255,255,255,0.12)" />
+
+        {hovered && (
+          <rect x="21" y="21" width={W-42} height={H-42} rx={R}
+            fill="none" stroke="rgba(37,124,163,0.35)" strokeWidth="1.5"
+            clipPath="url(#nmt-clip)" />
+        )}
+
+        <rect x="1" y="1" width={W-2} height={H-2} rx="76"
+          fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="0.75" />
+        <rect x="2" y="3" width={W-4} height={H-6} rx="76"
+          fill="none" stroke="rgba(0,0,0,0.28)" strokeWidth="0.5" />
+      </svg>
+
+      <div style={{
+        position: "absolute",
+        top: SCREEN_T, left: SCREEN_L,
+        width: SCREEN_W, height: SCREEN_H,
+        borderRadius: SCREEN_BR,
+        overflow: "hidden",
+        isolation: "isolate",
+      }}>
+        <AppScreen />
+      </div>
+    </div>
+  );
+});
+
+/* ─── FloatingBadge ───────────────────────────────────────────────────────── */
+interface BadgeProps {
+  children: ReactNode;
+  delay?: number;
+  floatDur?: string;
+  floatDelay?: string;
+  style?: CSSProperties;
 }
 
-/* ── Counter ── */
-function Counter({ to, suffix = '' }: { to: number; suffix?: string }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const inView = useInView(ref, { once: true });
-  const mv = useMotionValue(0);
-  const spring = useSpring(mv, { stiffness: 55, damping: 18 });
-  useEffect(() => { if (inView) mv.set(to); }, [inView, mv, to]);
-  useEffect(() => spring.on('change', v => {
-    if (ref.current) ref.current.textContent = Math.round(v) + suffix;
-  }), [spring, suffix]);
-  return <span ref={ref}>0{suffix}</span>;
-}
-
-/* ── Modal ── */
-function Modal({ r, onClose }: { r: Review; onClose: () => void }) {
+const FloatingBadge = memo(function FloatingBadge({
+  children, delay = 0, floatDur = "6s", floatDelay = "0s", style,
+}: BadgeProps) {
+  const [show, setShow] = useState(false);
   useEffect(() => {
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', h);
-    document.body.style.overflow = 'hidden';
-    return () => { window.removeEventListener('keydown', h); document.body.style.overflow = ''; };
-  }, [onClose]);
+    const t = setTimeout(() => setShow(true), delay);
+    return () => clearTimeout(t);
+  }, [delay]);
 
   return (
-    <motion.div
-      className="fixed inset-0 z-[9999] flex items-center justify-center"
-      style={{ padding: '16px' }}
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-    >
-      {/* Backdrop */}
-      <motion.div
-        className="absolute inset-0 backdrop-blur-xl"
-        style={{ background: 'rgba(0,0,0,0.82)' }}
-        onClick={onClose}
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-      />
-
-      {/* Card */}
-      <motion.div
-        className="relative z-10 w-full"
-        style={{ maxWidth: '440px' }}
-        initial={{ opacity: 0, scale: 0.88, y: 24 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.94, y: 12 }}
-        transition={{ type: 'spring', damping: 28, stiffness: 340 }}
-      >
-        <div className="rounded-2xl overflow-hidden shadow-[0_32px_80px_rgba(0,0,0,0.8),0_0_0_1px_rgba(255,255,255,0.08)]"
-          style={{ background: '#0f0f0f' }}>
-
-          {/* Colored header */}
-          <div className={`relative bg-gradient-to-br ${r.color} overflow-visible`} style={{ height: '88px' }}>
-            <div className="absolute inset-0 opacity-[0.18]"
-              style={{ backgroundImage: 'radial-gradient(circle at 25% 50%,white 1.5px,transparent 1.5px),radial-gradient(circle at 75% 50%,white 1.5px,transparent 1.5px)', backgroundSize: '22px 22px' }} />
-            <motion.div
-              className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent"
-              animate={{ x: ['-100%', '200%'] }}
-              transition={{ duration: 2.2, repeat: Infinity, repeatDelay: 3, ease: 'easeInOut' }}
-            />
-            <button onClick={onClose}
-              className="absolute top-3 right-3 w-7 h-7 rounded-full bg-black/30 hover:bg-black/50 backdrop-blur-sm transition-all flex items-center justify-center z-20">
-              <X className="w-3.5 h-3.5 text-white" style={{ display: 'block', flexShrink: 0 }} />
-            </button>
-            <div className="absolute left-5 z-20" style={{ bottom: '-24px' }}>
-             <div
-  className={`w-12 h-12 rounded-full bg-gradient-to-br ${r.color} ring-[3px] shadow-lg`}
-  style={{ '--tw-ring-color': '#1a1a1a' } as React.CSSProperties}
->
-              </div>
-            </div>
-          </div>
-
-          {/* Body */}
-          <div className="px-5 pb-5" style={{ paddingTop: '36px' }}>
-            <div className="flex items-start justify-between gap-2 mb-4">
-              <div>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <p className="font-bold text-white text-[15px] leading-tight">{r.name}</p>
-                  {r.verified && (
-                    <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-blue-400 px-1.5 py-0.5 rounded-full uppercase tracking-wide"
-                      style={{ background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.25)' }}>
-                      <BadgeCheck className="w-2.5 h-2.5" style={{ display: 'block', flexShrink: 0 }} />
-                      Verified
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.35)' }}>{r.location}</p>
-              </div>
-              <div className="text-right shrink-0">
-                <Stars n={r.rating} size={3.5} />
-                <p className="text-[9px] mt-0.5" style={{ color: 'rgba(255,255,255,0.3)' }}>{r.rating}.0 / 5.0</p>
-              </div>
-            </div>
-
-            {/* Review text */}
-            <div className="rounded-xl p-4 relative mb-4"
-              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-              <Quote className="absolute top-3 left-3 w-4 h-4" style={{ color: 'rgba(255,255,255,0.1)', display: 'block', flexShrink: 0 }} />
-              <p className="text-[13px] leading-[1.75] pl-5" style={{ color: 'rgba(255,255,255,0.75)' }}>{r.text}</p>
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex gap-1.5 flex-wrap items-center">
-                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-white px-2.5 py-1 rounded-full"
-                  style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.12)' }}>
-                  <span style={{ display: 'inline-block', flexShrink: 0 }}>{SERVICE_ICONS[r.service]}</span>
-                  {r.service}
-                </span>
-                <span className="text-[10px] px-2.5 py-1 rounded-full"
-                  style={{ color: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.06)' }}>{r.date}</span>
-              </div>
-              <button className="flex items-center gap-1 text-[10px] transition-colors group"
-                style={{ color: 'rgba(255,255,255,0.3)' }}>
-                <ThumbsUp className="w-3 h-3" style={{ display: 'block', flexShrink: 0 }} />
-                <span>{r.helpful} helpful</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </motion.div>
-    </motion.div>
+    <div style={{
+      position: "absolute",
+      willChange: "transform",
+      opacity: show ? 1 : 0,
+      animation: show
+        ? `nmt-badge 0.75s cubic-bezier(0.16,1,0.3,1) both, nmt-float ${floatDur} ease-in-out ${floatDelay} infinite`
+        : "none",
+      ...style,
+    }}>
+      {children}
+    </div>
   );
-}
+});
 
-/* ── Review Card ── */
-function ReviewCard({ r, i }: { r: Review; i: number }) {
-  const [open, setOpen] = useState(false);
+/* ─── Main ────────────────────────────────────────────────────────────────── */
+export default function NeuromotionTechHero() {
+  const [mounted, setMounted] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [tilt,    setTilt]    = useState({ x: 0, y: 0 });
+  const phoneRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setMounted(true), 60);
+    return () => clearTimeout(t);
+  }, []);
+
+  const onMove  = useCallback((e: MouseEvent<HTMLDivElement>) => {
+    if (!phoneRef.current) return;
+    const r = phoneRef.current.getBoundingClientRect();
+    setTilt({
+      x:  ((e.clientX - r.left) / r.width  - 0.5) * 14,
+      y: -((e.clientY - r.top)  / r.height - 0.5) * 10,
+    });
+  }, []);
+
+  const onEnter = useCallback(() => setHovered(true), []);
+  const onLeave = useCallback(() => { setHovered(false); setTilt({ x: 0, y: 0 }); }, []);
+
+  /* Premium glass badge — high contrast on ice blue bg */
+  const glass: CSSProperties = {
+    background: "rgba(0, 6, 18, 0.82)",
+    backdropFilter: "blur(32px)",
+    WebkitBackdropFilter: "blur(32px)",
+    border: "1px solid rgba(255,255,255,0.10)",
+    borderRadius: 16,
+    padding: "12px 16px",
+    willChange: "transform",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06)",
+  };
+
   return (
     <>
-      <motion.div
-        initial={{ opacity: 0, y: 24, scale: 0.96 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ delay: i * 0.05, duration: 0.4, ease: [0.22, 1, 0.36, 1] as const }}
-        whileHover={{ y: -6, transition: { duration: 0.18, ease: 'easeOut' } }}
-        onClick={() => setOpen(true)}
-        className="cursor-pointer h-full group"
-      >
-        <div className="h-full flex flex-col overflow-hidden rounded-2xl relative transition-all duration-250"
-          style={{
-            background: '#0d0d0d',
-            border: '1px solid rgba(255,255,255,0.07)',
-            boxShadow: '0 1px 12px rgba(0,0,0,0.4)',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.border = '1px solid rgba(255,255,255,0.14)')}
-          onMouseLeave={e => (e.currentTarget.style.border = '1px solid rgba(255,255,255,0.07)')}
-        >
-          {/* Top accent bar */}
-          <div className={`h-[3px] bg-gradient-to-r ${r.color} flex-shrink-0`} />
+      <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
-          <div className="flex flex-col gap-3 p-4 flex-1">
-            {/* Header */}
-            <div className="flex items-center gap-2.5">
-              <div className={`w-9 h-9 rounded-full bg-gradient-to-br ${r.color} flex items-center justify-center flex-shrink-0 shadow-lg`}>
-                <span className="text-white text-[10px] font-bold select-none">{r.initials}</span>
+      <section style={L.section}>
+
+        {/* ── Ice blue aurora background layers ── */}
+        <div aria-hidden style={L.auroraWrap}>
+          {/* Primary deep ice blue wash — covers entire bg */}
+          <div style={{
+            position: "absolute", inset: 0,
+            background: "radial-gradient(ellipse 140% 100% at 50% -10%, #0d2d45 0%, #071829 40%, #000d1a 70%, #000810 100%)",
+          }} />
+
+          {/* Large aurora blob — top left */}
+          <div style={{
+            position: "absolute",
+            top: "-20%", left: "-15%",
+            width: "70vw", height: "70vw",
+            maxWidth: 900, maxHeight: 900,
+            borderRadius: "50%",
+            background: "radial-gradient(circle, rgba(37,124,163,0.42) 0%, rgba(37,124,163,0.18) 40%, transparent 70%)",
+            animation: "nmt-aurora-1 18s ease-in-out infinite",
+            willChange: "transform",
+          }} />
+
+          {/* Secondary aurora blob — bottom right */}
+          <div style={{
+            position: "absolute",
+            bottom: "-25%", right: "-10%",
+            width: "60vw", height: "60vw",
+            maxWidth: 780, maxHeight: 780,
+            borderRadius: "50%",
+            background: "radial-gradient(circle, rgba(13,66,100,0.55) 0%, rgba(9,44,70,0.28) 45%, transparent 70%)",
+            animation: "nmt-aurora-2 22s ease-in-out infinite",
+            willChange: "transform",
+          }} />
+
+          {/* Tertiary aurora — center accent */}
+          <div style={{
+            position: "absolute",
+            top: "30%", left: "30%",
+            width: "40vw", height: "40vw",
+            maxWidth: 520, maxHeight: 520,
+            borderRadius: "50%",
+            background: "radial-gradient(circle, rgba(37,124,163,0.16) 0%, transparent 65%)",
+            animation: "nmt-aurora-3 14s ease-in-out infinite",
+            willChange: "transform",
+          }} />
+
+          {/* Horizontal light band across mid-section */}
+          <div style={{
+            position: "absolute",
+            top: "35%", left: 0, right: 0, height: "30%",
+            background: "linear-gradient(180deg, transparent 0%, rgba(37,124,163,0.06) 50%, transparent 100%)",
+            pointerEvents: "none",
+          }} />
+
+          {/* Top rim glow — pure white edge light */}
+          <div style={{
+            position: "absolute",
+            top: 0, left: 0, right: 0, height: 1,
+            background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.12) 30%, rgba(37,124,163,0.5) 50%, rgba(255,255,255,0.12) 70%, transparent)",
+          }} />
+
+          {/* Animated grid — very subtle */}
+          <div style={{
+            position: "absolute", inset: "-50px",
+            backgroundImage: "linear-gradient(rgba(37,124,163,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(37,124,163,0.06) 1px, transparent 1px)",
+            backgroundSize: "50px 50px",
+            animation: "nmt-grid 12s linear infinite",
+            willChange: "transform",
+          }} />
+
+          {/* Noise grain overlay for depth */}
+          <div style={{
+            position: "absolute", inset: 0,
+            backgroundImage: "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E\")",
+            opacity: 0.35,
+            pointerEvents: "none",
+          }} />
+        </div>
+
+        {/* Scanline */}
+        <div style={L.scanLine} aria-hidden />
+
+        {/* ── Content grid ── */}
+        <div style={L.grid}>
+
+          {/* LEFT — copy */}
+          <div style={{
+            ...L.copyCol,
+            ...(mounted
+              ? { animation: "nmt-right 0.9s cubic-bezier(0.16,1,0.3,1) both" }
+              : { opacity: 0 }),
+          }}>
+            {/* Brand row */}
+            <div style={L.brandRow}>
+              <div style={L.logoBox} aria-label="NeuromotionTech logo">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+                  <path d="M8 1L14 5V11L8 15L2 11V5L8 1Z" stroke="white" strokeWidth="1.5" />
+                  <circle cx="8" cy="8" r="2.2" fill="white" />
+                </svg>
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1">
-                  <p className="text-[12px] font-bold text-white truncate leading-tight">{r.name}</p>
-                  {r.verified && <BadgeCheck className="w-3 h-3 text-blue-400 flex-shrink-0" style={{ display: 'block' }} />}
+              <span style={L.brandName}>NeuromotionTech</span>
+              <div style={L.livePill}>
+                <div style={L.liveDot} />
+                <span style={L.liveLabel}>Live</span>
+              </div>
+            </div>
+
+            {/* Eyebrow */}
+            <div style={L.eyebrow}>
+              <div style={L.eyebrowBar} />
+              <span style={L.eyebrowText}>Mobile-First Development</span>
+            </div>
+
+            {/* Headline */}
+            <h1 style={L.h1}>
+              Perfect Mobile{" "}
+              <span style={L.gradWord}>Responsive</span>
+              <br />
+              <span style={L.h1Sub}>Website&thinsp;/&thinsp;Apps</span>
+            </h1>
+
+            {/* Body */}
+            <p style={L.body}>
+              We craft pixel-perfect digital experiences that flow seamlessly
+              across every screen — engineered from concept to deployment with
+              obsessive precision.
+            </p>
+
+            {/* CTA row */}
+            <div style={L.ctaRow}>
+              <button style={L.ctaPrimary}>
+                Start a Project
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ marginLeft: 8 }}>
+                  <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+              <button style={L.ctaSecondary}>View Work</button>
+            </div>
+
+            {/* Trust badges */}
+            <div style={L.trustRow}>
+              {[
+                { val: "500+", label: "Projects" },
+                { val: "99%",  label: "Uptime" },
+                { val: "4.9★", label: "Rating" },
+              ].map((t) => (
+                <div key={t.label} style={L.trustItem}>
+                  <div style={L.trustVal}>{t.val}</div>
+                  <div style={L.trustLabel}>{t.label}</div>
                 </div>
-                <p className="text-[10px] truncate leading-tight" style={{ color: 'rgba(255,255,255,0.35)' }}>{r.location}</p>
-              </div>
-              <div className="flex-shrink-0 flex flex-col items-end gap-0.5">
-                <Stars n={r.rating} />
-                <span className="text-[9px] font-medium" style={{ color: 'rgba(255,255,255,0.22)' }}>{r.year}</span>
-              </div>
-            </div>
-
-            {/* Service badge */}
-            <div>
-              <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-2 py-0.5 rounded-full max-w-full"
-                style={{ color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <span style={{ display: 'inline-block', flexShrink: 0 }}>{SERVICE_ICONS[r.service]}</span>
-                <span className="truncate">{r.service}</span>
-              </span>
-            </div>
-
-            {/* Text */}
-            <p className="text-[11.5px] leading-[1.7] line-clamp-3 flex-1"
-              style={{ color: 'rgba(255,255,255,0.55)' }}>{r.text}</p>
-
-            {/* Footer */}
-            <div className="flex items-center justify-between pt-2.5 mt-auto"
-              style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-              <span className="text-[9px]" style={{ color: 'rgba(255,255,255,0.25)' }}>{r.date}</span>
-              <span className="text-[9px] font-semibold opacity-0 group-hover:opacity-100 transition-all duration-200"
-                style={{ color: 'rgba(167,139,250,0.9)' }}>
-                Read full →
-              </span>
+              ))}
             </div>
           </div>
-        </div>
-      </motion.div>
 
-      <AnimatePresence>
-        {open && <Modal r={r} onClose={() => setOpen(false)} />}
-      </AnimatePresence>
+          {/* RIGHT — phone */}
+          <div style={{
+            ...L.phoneCol,
+            ...(mounted
+              ? { animation: "nmt-left 0.9s cubic-bezier(0.16,1,0.3,1) 0.18s both" }
+              : { opacity: 0 }),
+          }}>
+
+            {/* Pulse rings */}
+            {PULSE_SCALES.map((sc, i) => (
+              <div key={i} aria-hidden style={{
+                position: "absolute",
+                width: `${sc * 100}%`, height: `${sc * 70}%`,
+                borderRadius: "50%",
+                border: "1px solid rgba(37,124,163,0.12)",
+                top: "50%", left: "50%",
+                transform: "translate(-50%,-50%)",
+                animation: `nmt-pulse 4.8s ease-in-out ${i * 0.8}s infinite`,
+                pointerEvents: "none",
+              }} />
+            ))}
+
+            {/* Phone with 3-D tilt */}
+            <div
+              ref={phoneRef}
+              onMouseEnter={onEnter}
+              onMouseLeave={onLeave}
+              onMouseMove={onMove}
+              style={{
+                width: "clamp(268px, 36vw, 384px)",
+                willChange: "transform",
+                transform: `perspective(1100px) rotateY(${tilt.x}deg) rotateX(${tilt.y}deg)`,
+                transition: hovered
+                  ? "transform 0.08s linear"
+                  : "transform 0.95s cubic-bezier(0.16,1,0.3,1)",
+                filter: `drop-shadow(0 60px 120px rgba(37,124,163,${hovered ? 0.55 : 0.35}))
+                         drop-shadow(0 24px 50px rgba(0,0,0,0.9))
+                         drop-shadow(0 0 80px rgba(37,124,163,${hovered ? 0.22 : 0.12}))`,
+                animation: "nmt-float 6.5s ease-in-out infinite",
+              }}
+            >
+              <PhoneFrame hovered={hovered} />
+            </div>
+
+            {/* Badge — active users */}
+            <FloatingBadge delay={850} floatDur="7.5s" floatDelay="1s"
+              style={{ top: "8%", right: "-1%", ...glass }}>
+              <div style={B.label}>Active Now</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ display: "flex" }}>
+                  {AVATAR_COLORS.map((c, i) => (
+                    <div key={i} style={{
+                      width: 24, height: 24, borderRadius: "50%",
+                      background: `linear-gradient(135deg,${c},${c}66)`,
+                      border: "2px solid #000d1a",
+                      marginLeft: i === 0 ? 0 : -7,
+                    }} />
+                  ))}
+                </div>
+                <div>
+                  <div style={B.val}>1,284</div>
+                  <div style={{ ...B.sub, color: "#34d399" }}>↑ Live</div>
+                </div>
+              </div>
+            </FloatingBadge>
+
+            {/* Badge — lighthouse */}
+            <FloatingBadge delay={1050} floatDur="5.5s" floatDelay="0.6s"
+              style={{ bottom: "14%", left: "-2%", ...glass, borderColor: "rgba(37,124,163,0.22)" }}>
+              <div style={{ ...B.label, color: "rgba(37,124,163,0.9)" }}>Performance</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ position: "relative", width: 38, height: 38 }}>
+                  <svg viewBox="0 0 38 38"
+                    style={{ transform: "rotate(-90deg)", width: 38, height: 38 }}>
+                    <circle cx="19" cy="19" r="16" fill="none"
+                      stroke="rgba(37,124,163,0.15)" strokeWidth="3" />
+                    <circle cx="19" cy="19" r="16" fill="none"
+                      stroke="#3dd6c8" strokeWidth="3"
+                      strokeDasharray={`${0.97 * 100.53} 100.53`}
+                      strokeLinecap="round" />
+                  </svg>
+                  <div style={B.radial}>97</div>
+                </div>
+                <div>
+                  <div style={B.val}>Lighthouse</div>
+                  <div style={B.sub}>Score</div>
+                </div>
+              </div>
+            </FloatingBadge>
+
+            {/* Badge — pixel perfect */}
+            <FloatingBadge delay={1250} floatDur="8.5s" floatDelay="2.2s"
+              style={{ top: "40%", right: "-8%", ...glass,
+                borderColor: "rgba(167,139,250,0.2)",
+                display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={B.icon}>✦</div>
+              <div>
+                <div style={B.val}>Pixel Perfect</div>
+                <div style={B.sub}>Every breakpoint</div>
+              </div>
+            </FloatingBadge>
+          </div>
+        </div>
+      </section>
     </>
   );
 }
 
-/* ── Live Ticker ── */
-function LiveTicker() {
-  const [idx, setIdx] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setIdx(p => (p + 1) % ALL.length), 1200);
-    return () => clearInterval(t);
-  }, []);
-  const r = ALL[idx];
-  return (
-    <div className="relative rounded-2xl px-4 py-3.5 overflow-hidden flex items-center gap-3 min-h-[58px]"
-      style={{ background: '#0d0d0d', border: '1px solid rgba(255,255,255,0.08)' }}>
-      <motion.div
-        className="absolute inset-0 pointer-events-none"
-        style={{ background: 'linear-gradient(90deg, transparent, rgba(167,139,250,0.06), transparent)' }}
-        animate={{ x: ['-120%', '220%'] }}
-        transition={{ duration: 2.6, repeat: Infinity, ease: 'linear', repeatDelay: 1.8 }}
-      />
-      <div className="flex items-center gap-1.5 flex-shrink-0 z-10">
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute h-full w-full rounded-full bg-emerald-400 opacity-75" />
-          <span className="relative flex h-2 w-2 rounded-full bg-emerald-500" />
-        </span>
-        <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-500 hidden sm:block">Live</span>
-      </div>
-      <AnimatePresence mode="wait">
-        <motion.div key={r.id}
-          initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
-          transition={{ duration: 0.22 }}
-          className="flex items-center gap-2.5 min-w-0 flex-1 z-10"
-        >
-          <div className={`w-7 h-7 rounded-full bg-gradient-to-br ${r.color} flex items-center justify-center flex-shrink-0`}>
-            <span className="text-white text-[9px] font-bold">{r.initials}</span>
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] font-bold text-white">{r.name}</span>
-              <Stars n={r.rating} />
-              <span className="text-[9px] hidden sm:block truncate" style={{ color: 'rgba(255,255,255,0.3)' }}>· {r.location}</span>
-            </div>
-            <p className="text-[10px] truncate mt-px" style={{ color: 'rgba(255,255,255,0.4)' }}>{r.text.slice(0, 70)}…</p>
-          </div>
-          <span className="text-[9px] flex-shrink-0 hidden lg:block" style={{ color: 'rgba(255,255,255,0.2)' }}>{r.date}</span>
-        </motion.div>
-      </AnimatePresence>
-    </div>
-  );
-}
+/* ─── Layout styles ───────────────────────────────────────────────────────── */
+const L = {
+  section: {
+    minHeight: "100vh", width: "100%",
+    background: "#000d1a",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    padding: "clamp(52px,7vw,100px) clamp(20px,5vw,64px)",
+    position: "relative", overflow: "hidden",
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
+  } as CSSProperties,
 
-/* ── Year Badge ── */
-function YearBadge({ year, count }: { year: string; count: number }) {
-  return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2.5 py-1 rounded-full"
-      style={{ color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)' }}>
-      <span className="font-bold text-white">{year}</span>
-      <span style={{ color: 'rgba(255,255,255,0.2)' }}>·</span>
-      <span>{count} reviews</span>
-    </span>
-  );
-}
+  auroraWrap: {
+    position: "absolute", inset: 0,
+    overflow: "hidden", pointerEvents: "none",
+  } as CSSProperties,
 
-/* ── Stat Card ── */
-function StatCard({ icon: Icon, value, suffix, label, color, delay }:
-  { icon: React.ElementType; value: number; suffix: string; label: string; color: string; delay: number }) {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true });
-  return (
-    <motion.div ref={ref}
-      initial={{ opacity: 0, y: 18 }}
-      animate={inView ? { opacity: 1, y: 0 } : {}}
-      transition={{ delay, duration: 0.45 }}
-      className="flex flex-col items-center gap-2"
-    >
-      <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center shadow-lg`}>
-        <Icon className="w-5 h-5 text-white" style={{ display: 'block', flexShrink: 0 }} />
-      </div>
-      <p className="text-2xl sm:text-[2rem] font-black text-white leading-none tracking-tight tabular-nums">
-        <Counter to={value} suffix={suffix} />
-      </p>
-      <p className="text-[10px] font-medium text-center" style={{ color: 'rgba(255,255,255,0.38)' }}>{label}</p>
-    </motion.div>
-  );
-}
+  grid: {
+    width: "100%", maxWidth: 1200,
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(290px, 1fr))",
+    gap: "clamp(48px,6vw,100px)",
+    alignItems: "center",
+    position: "relative", zIndex: 1,
+  } as CSSProperties,
 
-/* ── Pagination builder ── */
-function buildPages(page: number, total: number): (number | '…')[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i);
-  const p: (number | '…')[] = [0];
-  if (page > 2) p.push('…');
-  for (let i = Math.max(1, page - 1); i <= Math.min(total - 2, page + 1); i++) p.push(i);
-  if (page < total - 3) p.push('…');
-  p.push(total - 1);
-  return p;
-}
+  copyCol: {
+    display: "flex", flexDirection: "column",
+    alignItems: "center", textAlign: "center",
+  } as CSSProperties,
 
-/* ── Background ── */
-function Background() {
-  return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
-      {/* Pitch black base */}
-      <div className="absolute inset-0" style={{ background: '#000' }} />
+  phoneCol: {
+    display: "flex", justifyContent: "center", alignItems: "center",
+    position: "relative",
+    minHeight: "clamp(460px,62vw,700px)",
+  } as CSSProperties,
 
-      {/* Subtle ambient orbs */}
-      <motion.div className="absolute rounded-full"
-        style={{ width: 700, height: 700, left: '-15%', top: '-20%', background: 'radial-gradient(circle, rgba(139,92,246,0.07) 0%, transparent 60%)' }}
-        animate={{ x: [0, 35, 0], y: [0, 22, 0] }}
-        transition={{ duration: 20, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      <motion.div className="absolute rounded-full"
-        style={{ width: 600, height: 600, right: '-12%', bottom: '-18%', background: 'radial-gradient(circle, rgba(59,130,246,0.06) 0%, transparent 60%)' }}
-        animate={{ x: [0, -25, 0], y: [0, -18, 0] }}
-        transition={{ duration: 26, repeat: Infinity, ease: 'easeInOut', delay: 4 }}
-      />
+  scanLine: {
+    position: "absolute", left: 0, right: 0, height: 1,
+    background: "linear-gradient(90deg, transparent, rgba(37,124,163,0.18), transparent)",
+    animation: "nmt-scan 12s linear infinite",
+    willChange: "top", pointerEvents: "none", zIndex: 0,
+  } as CSSProperties,
 
-      {/* Fine dot grid */}
-      <div className="absolute inset-0 opacity-[0.022]"
-        style={{ backgroundImage: 'radial-gradient(circle,rgba(255,255,255,0.8) 1px,transparent 1px)', backgroundSize: '28px 28px' }} />
+  brandRow: {
+    display: "flex", alignItems: "center", gap: 10,
+    marginBottom: "clamp(18px,2.8vw,28px)", justifyContent: "center",
+  } as CSSProperties,
 
-      {/* Top shimmer line */}
-      <div className="absolute top-0 left-0 right-0 h-px"
-        style={{ background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.4), transparent)' }} />
-    </div>
-  );
-}
+  logoBox: {
+    width: 34, height: 34, borderRadius: 9,
+    background: "linear-gradient(135deg,#257ca3,#1a5f82)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    boxShadow: "0 0 28px rgba(37,124,163,0.65), 0 0 60px rgba(37,124,163,0.25)",
+    flexShrink: 0,
+    border: "1px solid rgba(37,124,163,0.4)",
+  } as CSSProperties,
 
-/* ── Main Section ── */
-export default function ReviewSection() {
-  const [page, setPage] = useState(0);
-  const ref = useRef<HTMLElement>(null);
-  const inView = useInView(ref, { once: true, margin: '-60px' });
-  const totalPages = Math.ceil(ALL.length / PER_PAGE);
-  const pageReviews = ALL.slice(page * PER_PAGE, (page + 1) * PER_PAGE);
+  brandName: {
+    fontSize: "clamp(14px,1.5vw,17px)", fontWeight: 600,
+    color: "rgba(255,255,255,0.95)", letterSpacing: "0.2px",
+  } as CSSProperties,
 
-  const yearDist = useMemo(() => {
-    const m: Record<number, number> = {};
-    ALL.forEach(r => { m[r.year] = (m[r.year] || 0) + 1; });
-    return Object.entries(m).sort(([a], [b]) => +a - +b);
-  }, []);
+  livePill: {
+    padding: "3px 9px", borderRadius: 20,
+    background: "rgba(37,124,163,0.12)", border: "1px solid rgba(37,124,163,0.3)",
+    display: "flex", alignItems: "center", gap: 5,
+  } as CSSProperties,
 
-  const goTo = useCallback((p: number) => {
-    setPage(p);
-    setTimeout(() => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
-  }, []);
+  liveDot: {
+    width: 5, height: 5, borderRadius: "50%",
+    background: "#3dd6c8",
+    boxShadow: "0 0 8px #3dd6c8",
+    animation: "nmt-dot 1.6s ease infinite",
+  } as CSSProperties,
 
-  return (
-    <section ref={ref} className="relative py-20 sm:py-28 px-4 sm:px-6 lg:px-8 overflow-hidden">
-      <Background />
+  liveLabel: {
+    fontSize: 9, color: "#3dd6c8",
+    letterSpacing: "1.5px", textTransform: "uppercase" as const,
+    fontWeight: 600,
+  } as CSSProperties,
 
-      <div className="relative max-w-7xl mx-auto">
+  eyebrow: {
+    display: "inline-flex", alignItems: "center", gap: 8,
+    padding: "5px 14px", borderRadius: 4,
+    background: "rgba(37,124,163,0.08)",
+    border: "1px solid rgba(37,124,163,0.22)",
+    marginBottom: "clamp(14px,2.2vw,22px)",
+  } as CSSProperties,
 
-        {/* Label pill */}
-        <motion.div initial={{ opacity: 0, y: 18 }} animate={inView ? { opacity: 1, y: 0 } : {}}
-          transition={{ duration: 0.45 }} className="flex justify-center mb-5">
-          <div className="inline-flex items-center gap-2 text-[10px] font-bold px-4 py-2 rounded-full uppercase tracking-widest"
-            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)' }}>
-            <Sparkles className="w-3 h-3 text-amber-400" style={{ display: 'block', flexShrink: 0 }} />
-            Client Reviews · Worldwide
-          </div>
-        </motion.div>
+  eyebrowBar: { width: 1, height: 11, background: "#257ca3", opacity: 0.9 } as CSSProperties,
 
-        {/* Headline */}
-        <motion.div initial={{ opacity: 0, y: 22 }} animate={inView ? { opacity: 1, y: 0 } : {}}
-          transition={{ duration: 0.5, delay: 0.05 }} className="text-center mb-10">
-          <h2 className="text-4xl sm:text-5xl md:text-[3.4rem] font-black text-white leading-[1.07] tracking-tight">
-            Trusted by{' '}
-            <span className="relative inline-block">
-              <span className="relative z-10 text-transparent bg-clip-text bg-gradient-to-r from-violet-400 via-blue-400 to-cyan-400">
-                {ALL.length}+ Clients
-              </span>
-              <motion.span
-                className="absolute -bottom-0.5 left-0 right-0 h-[3px] rounded-full bg-gradient-to-r from-violet-500 via-blue-500 to-cyan-400"
-                initial={{ scaleX: 0 }} animate={inView ? { scaleX: 1 } : {}}
-                transition={{ delay: 0.55, duration: 0.7, ease: [0.22, 1, 0.36, 1] as const }}
-                style={{ transformOrigin: 'left' }}
-              />
-            </span>
-            {' '}Around the World
-          </h2>
-          <p className="mt-4 text-sm sm:text-[15px] max-w-sm mx-auto leading-relaxed"
-            style={{ color: 'rgba(255,255,255,0.38)' }}>
-            Real stories. Measurable results. Click any card to read the full review.
-          </p>
-        </motion.div>
+  eyebrowText: {
+    fontSize: "clamp(9px,0.9vw,10px)", color: "#5ba8cc",
+    letterSpacing: "3px", textTransform: "uppercase" as const, fontWeight: 600,
+  } as CSSProperties,
 
-        {/* Stats */}
-        <motion.div initial={{ opacity: 0, y: 14 }} animate={inView ? { opacity: 1, y: 0 } : {}}
-          transition={{ delay: 0.1, duration: 0.45 }}
-          className="flex flex-wrap justify-center gap-8 sm:gap-14 mb-9">
-          <StatCard icon={Award}      value={420} suffix="+" label="Total Reviews"  color="from-violet-500 to-indigo-600" delay={0.14} />
-          <StatCard icon={Star}       value={49}  suffix=""  label="Rating 4.9★"    color="from-amber-400 to-orange-500"  delay={0.19} />
-          <StatCard icon={TrendingUp} value={98}  suffix="%" label="Satisfaction"   color="from-emerald-500 to-teal-600"  delay={0.24} />
-          <StatCard icon={Zap}        value={10}  suffix="+" label="Services"       color="from-sky-500 to-blue-600"      delay={0.29} />
-        </motion.div>
+  h1: {
+    fontSize: "clamp(34px,4.8vw,62px)", fontWeight: 800,
+    lineHeight: 1.07, letterSpacing: "-1.5px",
+    color: "#ffffff", margin: "0 0 clamp(14px,2.2vw,22px)",
+    textShadow: "0 2px 40px rgba(37,124,163,0.2)",
+  } as CSSProperties,
 
-        {/* Year badges */}
-        <motion.div initial={{ opacity: 0 }} animate={inView ? { opacity: 1 } : {}}
-          transition={{ delay: 0.18 }} className="flex flex-wrap justify-center gap-2 mb-6">
-          {yearDist.map(([y, c]) => <YearBadge key={y} year={y} count={c} />)}
-        </motion.div>
+  gradWord: {
+    display: "inline-block",
+    background: "linear-gradient(135deg, #257ca3 0%, #3dd6c8 45%, #60c8f5 75%, #a78bfa 100%)",
+    backgroundSize: "200% auto",
+    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+    backgroundClip: "text",
+    animation: "nmt-shimmer 4.5s linear infinite",
+    filter: "drop-shadow(0 0 20px rgba(37,124,163,0.5))",
+  } as CSSProperties,
 
-        {/* Live ticker */}
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={inView ? { opacity: 1, y: 0 } : {}}
-          transition={{ delay: 0.22, duration: 0.38 }} className="max-w-2xl mx-auto mb-9">
-          <LiveTicker />
-        </motion.div>
+  h1Sub: {
+    fontWeight: 300, fontSize: "0.8em",
+    color: "rgba(255,255,255,0.4)", letterSpacing: "-0.5px",
+  } as CSSProperties,
 
-        {/* Review grid */}
-        <AnimatePresence mode="wait">
-          <motion.div key={page}
-            initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
-          >
-            {pageReviews.map((r, i) => <ReviewCard key={r.id} r={r} i={i} />)}
-          </motion.div>
-        </AnimatePresence>
+  body: {
+    fontSize: "clamp(13px,1.3vw,15px)", lineHeight: 1.82,
+    color: "rgba(255,255,255,0.5)", fontWeight: 400,
+    maxWidth: 400, margin: 0, letterSpacing: "0.1px",
+  } as CSSProperties,
 
-        {/* Pagination */}
-        <div className="flex items-center justify-center gap-1.5 mt-10">
-          <button onClick={() => goTo(Math.max(0, page - 1))} disabled={page === 0}
-            className="w-9 h-9 rounded-full flex items-center justify-center transition-all disabled:opacity-25"
-            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.6)' }}>
-            <ChevronLeft className="w-4 h-4" style={{ display: 'block', flexShrink: 0 }} />
-          </button>
+  ctaRow: {
+    display: "flex", gap: 12, marginTop: "clamp(22px,3vw,32px)",
+    justifyContent: "center", flexWrap: "wrap" as const,
+  } as CSSProperties,
 
-          <div className="flex items-center gap-1 mx-1">
-            {buildPages(page, totalPages).map((p, i) =>
-              p === '…' ? (
-                <span key={`d${i}`} className="w-5 text-center text-xs select-none" style={{ color: 'rgba(255,255,255,0.2)' }}>…</span>
-              ) : (
-                <button key={p} onClick={() => goTo(p as number)}
-                  className={`rounded-full text-[11px] font-bold transition-all duration-150 ${
-                    p === page
-                      ? 'w-9 h-9 bg-gradient-to-br from-violet-600 to-blue-600 text-white shadow-lg shadow-violet-900/40'
-                      : 'w-8 h-8'
-                  }`}
-                  style={p !== page ? { color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' } : {}}>
-                  {(p as number) + 1}
-                </button>
-              )
-            )}
-          </div>
+  ctaPrimary: {
+    display: "inline-flex", alignItems: "center",
+    padding: "12px 26px", borderRadius: 10,
+    background: "linear-gradient(135deg, #257ca3 0%, #1a5f82 100%)",
+    color: "#ffffff", fontWeight: 700,
+    fontSize: "clamp(13px,1.2vw,14px)", letterSpacing: "0.2px",
+    border: "1px solid rgba(37,124,163,0.5)",
+    boxShadow: "0 0 28px rgba(37,124,163,0.45), 0 4px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.12)",
+    cursor: "pointer",
+    fontFamily: "inherit",
+  } as CSSProperties,
 
-          <button onClick={() => goTo(Math.min(totalPages - 1, page + 1))} disabled={page === totalPages - 1}
-            className="w-9 h-9 rounded-full flex items-center justify-center transition-all disabled:opacity-25"
-            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.6)' }}>
-            <ChevronRight className="w-4 h-4" style={{ display: 'block', flexShrink: 0 }} />
-          </button>
-        </div>
+  ctaSecondary: {
+    display: "inline-flex", alignItems: "center",
+    padding: "12px 26px", borderRadius: 10,
+    background: "rgba(255,255,255,0.04)",
+    color: "rgba(255,255,255,0.75)", fontWeight: 600,
+    fontSize: "clamp(13px,1.2vw,14px)",
+    border: "1px solid rgba(255,255,255,0.10)",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    backdropFilter: "blur(12px)",
+  } as CSSProperties,
 
-        <p className="text-center text-[10px] mt-2 tabular-nums" style={{ color: 'rgba(255,255,255,0.22)' }}>
-          Showing {page * PER_PAGE + 1}–{Math.min((page + 1) * PER_PAGE, ALL.length)} of {ALL.length} reviews
-        </p>
+  trustRow: {
+    display: "flex", gap: 28, marginTop: "clamp(24px,3vw,36px)",
+    justifyContent: "center",
+    paddingTop: "clamp(18px,2vw,24px)",
+    borderTop: "1px solid rgba(37,124,163,0.12)",
+  } as CSSProperties,
 
-        {/* CTA */}
-        <motion.div initial={{ opacity: 0, y: 22 }} animate={inView ? { opacity: 1, y: 0 } : {}}
-          transition={{ delay: 0.35, duration: 0.45 }}
-          className="mt-16 flex flex-col items-center gap-3">
-          <div className="flex gap-0.5 items-center">
-            {[1,2,3,4,5].map(i => <Star key={i} className="w-4 h-4 fill-amber-400 text-amber-400" style={{ display: 'block', flexShrink: 0 }} />)}
-            <span className="ml-2 text-sm font-bold text-white">4.9 average rating</span>
-          </div>
-          <p className="text-[13px] text-center max-w-xs" style={{ color: 'rgba(255,255,255,0.38)' }}>
-            Join <span className="font-bold text-white">420+ satisfied clients</span> who chose us for their digital growth.
-          </p>
-          <div className="flex flex-wrap gap-2.5 justify-center">
-            <motion.button
-              type="button"
-              className="relative px-7 py-3 rounded-full text-[13px] font-bold text-white overflow-hidden"
-              style={{ background: 'linear-gradient(135deg,#7c3aed,#2563eb)', boxShadow: '0 8px 32px rgba(124,58,237,0.35)' }}
-              whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}>
-              <motion.div className="absolute inset-0 pointer-events-none"
-                style={{ background: 'linear-gradient(108deg,transparent 30%,rgba(255,255,255,0.15) 50%,transparent 70%)' }}
-                initial={{ x: '-130%' }} whileHover={{ x: '130%' }} transition={{ duration: 0.52 }} />
-              <span className="relative z-10">Start Your Project</span>
-            </motion.button>
-            <motion.button
-              type="button"
-              className="px-7 py-3 rounded-full text-[13px] font-bold"
-              style={{ color: 'rgba(255,255,255,0.55)', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
-              whileHover={{ scale: 1.05, color: '#fff' }} whileTap={{ scale: 0.97 }}>
-              View Our Work
-            </motion.button>
-          </div>
-        </motion.div>
+  trustItem: { textAlign: "center" as const } as CSSProperties,
 
-      </div>
-    </section>
-  );
-}
+  trustVal: {
+    fontSize: "clamp(18px,2vw,22px)", fontWeight: 800,
+    color: "#ffffff", letterSpacing: "-0.5px",
+    textShadow: "0 0 20px rgba(37,124,163,0.4)",
+  } as CSSProperties,
+
+  trustLabel: {
+    fontSize: 9, color: "rgba(37,124,163,0.75)",
+    letterSpacing: "2px", textTransform: "uppercase" as const,
+    fontWeight: 600, marginTop: 3,
+  } as CSSProperties,
+} as const;
+
+/* ─── Badge sub-styles ────────────────────────────────────────────────────── */
+const B = {
+  label: {
+    fontSize: 8, color: "rgba(255,255,255,0.3)",
+    letterSpacing: "2px", textTransform: "uppercase" as const, marginBottom: 8,
+  } as CSSProperties,
+  val:   { color: "#ffffff", fontSize: 13, fontWeight: 700 } as CSSProperties,
+  sub:   { color: "rgba(255,255,255,0.32)", fontSize: 9  } as CSSProperties,
+  radial: {
+    position: "absolute", inset: 0,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    color: "white", fontSize: 9, fontWeight: 700,
+  } as CSSProperties,
+  icon: {
+    width: 28, height: 28, borderRadius: 8,
+    background: "linear-gradient(135deg,#a78bfa,#818cf8)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    fontSize: 13, flexShrink: 0,
+    boxShadow: "0 0 16px rgba(167,139,250,0.4)",
+  } as CSSProperties,
+} as const;
+
+/* ─── App screen sub-styles ───────────────────────────────────────────────── */
+const SC = {
+  screen: {
+    width: "100%", height: "100%",
+    background: "linear-gradient(175deg, #010810 0%, #071929 42%, #040f1e 100%)",
+    position: "relative", overflow: "hidden",
+  } as CSSProperties,
+  grid: {
+    position: "absolute", inset: 0, opacity: 0.04, pointerEvents: "none",
+    backgroundImage:
+      "linear-gradient(rgba(37,124,163,1) 1px, transparent 1px), linear-gradient(90deg, rgba(37,124,163,1) 1px, transparent 1px)",
+    backgroundSize: "28px 28px",
+  } as CSSProperties,
+  statusBar: {
+    display: "flex", justifyContent: "space-between",
+    padding: "14px 22px 0", color: "rgba(255,255,255,0.85)",
+    fontSize: 11, fontWeight: 600, position: "relative", zIndex: 1,
+  } as CSSProperties,
+  appRow: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    marginBottom: 11,
+  } as CSSProperties,
+  appLabel: {
+    fontSize: 9, color: "#257ca3",
+    letterSpacing: "2.5px", textTransform: "uppercase" as const, marginBottom: 3,
+  } as CSSProperties,
+  appTitle:    { fontSize: 17, color: "white", fontWeight: 700 } as CSSProperties,
+  appIcon: {
+    width: 32, height: 32, borderRadius: 9,
+    background: "linear-gradient(135deg,#257ca3,#1a5f82)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    boxShadow: "0 0 14px rgba(37,124,163,0.5)",
+  } as CSSProperties,
+  appIconInner: {
+    width: 13, height: 13, borderRadius: 3,
+    border: "2px solid rgba(255,255,255,0.9)",
+  } as CSSProperties,
+  card: {
+    background: "linear-gradient(135deg, rgba(37,124,163,0.12) 0%, rgba(13,66,100,0.08) 100%)",
+    border: "1px solid rgba(37,124,163,0.2)",
+    borderRadius: 17, padding: 14, marginBottom: 9,
+    boxShadow: "inset 0 1px 0 rgba(37,124,163,0.1)",
+  } as CSSProperties,
+  cardLabel: {
+    fontSize: 9, color: "rgba(37,124,163,0.8)",
+    letterSpacing: "2px", textTransform: "uppercase" as const, marginBottom: 5,
+  } as CSSProperties,
+  cardValue: {
+    fontSize: 25, color: "white", fontWeight: 800,
+    letterSpacing: "-1px", marginBottom: 5,
+  } as CSSProperties,
+  badge: {
+    background: "rgba(52,211,153,0.13)", border: "1px solid rgba(52,211,153,0.27)",
+    borderRadius: 6, padding: "2px 8px", fontSize: 9, color: "#34d399", fontWeight: 600,
+  } as CSSProperties,
+  cardSub:  { fontSize: 9, color: "rgba(255,255,255,0.27)" } as CSSProperties,
+  chartRow: {
+    marginTop: 11, height: 34,
+    display: "flex", alignItems: "flex-end", gap: 3,
+  } as CSSProperties,
+  bar: { flex: 1, borderRadius: "2px 2px 0 0" } as CSSProperties,
+  metricsRow: { display: "flex", gap: 8, marginBottom: 9 } as CSSProperties,
+  metricCard: {
+    flex: 1,
+    background: "rgba(37,124,163,0.06)", border: "1px solid rgba(37,124,163,0.1)",
+    borderRadius: 13, padding: "11px 10px",
+  } as CSSProperties,
+  metricLabel: {
+    fontSize: 8, color: "rgba(255,255,255,0.3)",
+    letterSpacing: "1.5px", textTransform: "uppercase" as const, marginBottom: 4,
+  } as CSSProperties,
+  metricVal:   { fontSize: 16, color: "white", fontWeight: 700, marginBottom: 3 } as CSSProperties,
+  metricTrend: { fontSize: 9, color: "#34d399", fontWeight: 600 } as CSSProperties,
+  activity: {
+    background: "rgba(37,124,163,0.04)", border: "1px solid rgba(37,124,163,0.1)",
+    borderRadius: 13, overflow: "hidden",
+  } as CSSProperties,
+  activityHead: {
+    padding: "9px 12px 7px", fontSize: 8, color: "rgba(255,255,255,0.25)",
+    letterSpacing: "2px", textTransform: "uppercase" as const,
+    borderBottom: "1px solid rgba(37,124,163,0.08)",
+  } as CSSProperties,
+  activityRow: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    padding: "9px 12px", borderBottom: "1px solid rgba(37,124,163,0.06)",
+  } as CSSProperties,
+  dot:         { width: 6, height: 6, borderRadius: "50%" } as CSSProperties,
+  activityName: { color: "rgba(255,255,255,0.75)", fontSize: 11, fontWeight: 500 } as CSSProperties,
+  activityStatus: {
+    fontSize: 9, color: "rgba(255,255,255,0.3)",
+    background: "rgba(37,124,163,0.08)", padding: "2px 7px", borderRadius: 20,
+    border: "1px solid rgba(37,124,163,0.15)",
+  } as CSSProperties,
+  bottomNav: {
+    position: "absolute", bottom: 0, left: 0, right: 0,
+    background: "linear-gradient(to top, rgba(1,8,16,0.98) 60%, transparent)",
+    padding: "12px 28px 26px",
+    display: "flex", justifyContent: "space-around",
+  } as CSSProperties,
+} as const;

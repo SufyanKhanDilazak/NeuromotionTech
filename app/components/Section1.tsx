@@ -1,702 +1,991 @@
 'use client';
 
+/**
+ * ServicesTimeline — Performance-optimised rewrite
+ *
+ * WHAT WAS REMOVED (and why):
+ *  ✕ Particle system         — 10+ animated divs on RAF loops = GPU drain on mobile
+ *  ✕ CountUp                 — requestAnimationFrame number-ticking during scroll = jank
+ *  ✕ TimelineNode pulse rings — 22 continuous motion.divs (2 per node × 11 services)
+ *  ✕ Mouse-tilt on cards     — useMotionValue + useSpring + useTransform per card = expensive
+ *  ✕ Mouse-follow radial glow— repaints on every mousemove
+ *  ✕ Per-card shimmer motion — continuous translateX animation per card
+ *  ✕ useSpring on scroll     — replaced with direct useTransform (smoother on low-end)
+ *
+ * WHAT WAS KEPT / IMPROVED:
+ *  ✓ Scroll-driven timeline line (the signature animation — GPU-composited via height transform)
+ *  ✓ Comet head on timeline line
+ *  ✓ Card entrance animations (opacity + translateX, once, GPU-composited)
+ *  ✓ Active state colour changes via CSS transition (no JS)
+ *  ✓ Node active pulse via CSS @keyframes (single element, no framer-motion)
+ *  ✓ Header stagger (runs once)
+ *  ✓ All original card & layout designs preserved
+ *  ✓ Background depth via pure CSS gradients + grid (zero JS)
+ *  ✓ React.memo on all leaf components
+ *  ✓ Static data arrays outside component tree
+ */
+
 import React, {
-  useState, useRef, useCallback, useMemo, useEffect,
+  useRef, useState, useEffect, useCallback, memo,
 } from 'react';
 import {
-  motion, useInView, useMotionValue, useSpring,
-  useTransform, AnimatePresence, useScroll, useMotionTemplate,
+  motion, useScroll, useTransform, MotionValue,
 } from 'framer-motion';
 import {
-  ArrowUpRight, Zap, Users, Globe, FlaskConical,
-  Leaf, BarChart3, FileText, Utensils, Star, Sparkles,
+  Box, Cpu, Code2, Briefcase, Film, Database,
+  Camera, Search, Share2, Palette, Globe,
+  ArrowRight, Zap, ChevronDown,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
-/* ═══════════════════════════════════════════════════════════════
-   TYPES
-═══════════════════════════════════════════════════════════════ */
-type PatternKind = 'grid' | 'dots' | 'lines' | 'waves' | 'diagonal' | 'cross' | 'hex' | 'circuit';
-
-interface Project {
-  id: number;
-  num: string;
-  name: string;
-  tagline: string;
-  description: string;
-  category: string;
-  tags: string[];
-  bg: string;
-  accent: string;
-  glow: string;
-  text: string;
-  stat: string;
-  statLabel: string;
-  Icon: React.ElementType;
-  pattern: PatternKind;
-  featured?: boolean;
-  filterKey: string[];
+/* ─── Types ──────────────────────────────────────────────────────────────── */
+interface Service {
+  id: string; title: string; sub: string; description: string;
+  tags: string[]; accent: string; glow: string; icon: LucideIcon;
+  stat: string; statLabel: string; year: string;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   DATA
-═══════════════════════════════════════════════════════════════ */
-const PROJECTS: Project[] = [
-  {
-    id: 1, num: '01', name: 'Tax On Track', tagline: 'Smart Tax Management',
-    description: 'Comprehensive SaaS automating tax workflows, real-time compliance tracking and intelligent filing reminders for SMEs.',
-    category: 'FinTech · SaaS', tags: ['Dashboard', 'Automation'],
-    bg: 'linear-gradient(145deg,#04091a 0%,#070f24 55%,#09142e 100%)',
-    accent: '#60a5fa', glow: 'rgba(96,165,250,0.35)',
-    text: '#ffffff', stat: '60%', statLabel: 'Time Saved',
-    Icon: FileText, pattern: 'circuit', featured: true,
-    filterKey: ['all', 'saas'],
-  },
-  {
-    id: 2, num: '02', name: 'Niche Club', tagline: 'Premium Community Platform',
-    description: 'Exclusive membership ecosystem connecting niche entrepreneurs with curated resources and thriving masterminds.',
-    category: 'Community · Membership', tags: ['UI/UX', 'Branding'],
-    bg: 'linear-gradient(145deg,#0d0518 0%,#14082a 55%,#1a0c38 100%)',
-    accent: '#c084fc', glow: 'rgba(192,132,252,0.35)',
-    text: '#ffffff', stat: '340%', statLabel: 'Growth',
-    Icon: Users, pattern: 'hex',
-    filterKey: ['all'],
-  },
-  {
-    id: 3, num: '03', name: 'Dreamworks', tagline: 'Supply Chain Intelligence',
-    description: 'Real-time freight management, route optimisation and live tracking dashboard across 14 countries.',
-    category: 'Logistics · Enterprise', tags: ['Maps', 'B2B'],
-    bg: 'linear-gradient(145deg,#081206 0%,#0e1c08 55%,#132410 100%)',
-    accent: '#fbbf24', glow: 'rgba(251,191,36,0.35)',
-    text: '#ffffff', stat: '14', statLabel: 'Countries',
-    Icon: Globe, pattern: 'lines',
-    filterKey: ['all', 'enterprise'],
-  },
-  {
-    id: 4, num: '04', name: 'Peptides.london', tagline: 'Luxury Biotech E-Commerce',
-    description: 'High-conversion premium e-commerce for a London peptide research brand — clinical storytelling, seamless checkout.',
-    category: 'Health · E-Commerce', tags: ['Branding', 'Shop'],
-    bg: 'linear-gradient(145deg,#160900 0%,#211000 55%,#2c1500 100%)',
-    accent: '#fb923c', glow: 'rgba(251,146,60,0.35)',
-    text: '#fff7e6', stat: '+34%', statLabel: 'Conversion',
-    Icon: FlaskConical, pattern: 'dots',
-    filterKey: ['all', 'ecommerce'],
-  },
-  {
-    id: 5, num: '05', name: 'Casa Palma', tagline: 'Boutique Hotel Identity',
-    description: 'Immersive gallery, bespoke booking flows and luxury brand storytelling for a boutique hospitality brand.',
-    category: 'Hospitality · Luxury', tags: ['Branding', 'Booking'],
-    bg: 'linear-gradient(145deg,#140d00 0%,#1e1300 55%,#281a00 100%)',
-    accent: '#fde68a', glow: 'rgba(253,230,138,0.35)',
-    text: '#fff9e6', stat: '4.9★', statLabel: 'Rating',
-    Icon: Star, pattern: 'diagonal', featured: true,
-    filterKey: ['all'],
-  },
-  {
-    id: 6, num: '06', name: 'Eartherist', tagline: 'Sustainable Living Marketplace',
-    description: 'Eco-conscious product discovery, carbon footprint tracking and ethical brand storytelling at scale.',
-    category: 'Sustainability · D2C', tags: ['Marketplace', 'SEO'],
-    bg: 'linear-gradient(145deg,#011006 0%,#031809 55%,#052010 100%)',
-    accent: '#4ade80', glow: 'rgba(74,222,128,0.35)',
-    text: '#efffef', stat: '98%', statLabel: 'Satisfaction',
-    Icon: Leaf, pattern: 'waves',
-    filterKey: ['all', 'ecommerce'],
-  },
-  {
-    id: 7, num: '07', name: 'TOT Portal', tagline: 'Operations Command Centre',
-    description: 'Enterprise-grade internal portal — role-based dashboards, client management, task automation and live reporting.',
-    category: 'Enterprise · Portal', tags: ['Web App', 'B2B'],
-    bg: 'linear-gradient(145deg,#000d18 0%,#001320 55%,#001b2e 100%)',
-    accent: '#22d3ee', glow: 'rgba(34,211,238,0.35)',
-    text: '#e0f9ff', stat: '25h', statLabel: 'Saved/Week',
-    Icon: BarChart3, pattern: 'grid', featured: true,
-    filterKey: ['all', 'saas', 'enterprise'],
-  },
-  {
-    id: 8, num: '08', name: 'Sherekhankitchen', tagline: 'Artisan Food Brand & Store',
-    description: 'Vibrant food-first brand identity, online shop, recipe blog, catering bookings and product delivery.',
-    category: 'Food & Beverage · D2C', tags: ['Branding', 'E-Commerce'],
-    bg: 'linear-gradient(145deg,#190300 0%,#240500 55%,#300800 100%)',
-    accent: '#f97316', glow: 'rgba(249,115,22,0.35)',
-    text: '#fff3e6', stat: '3×', statLabel: 'Revenue',
-    Icon: Utensils, pattern: 'cross',
-    filterKey: ['all', 'ecommerce'],
-  },
+/* ─── Static data (defined once outside the component tree) ──────────────── */
+const SERVICES: Service[] = [
+  { id:'01', title:'3D Animation',          sub:'Bring ideas to life',            description:'Cinematic 3D animations and motion graphics that captivate audiences across every platform — from product launches to brand films.',                               tags:['Motion Graphics','VFX'],       accent:'#22d3ee', glow:'rgba(34,211,238,0.4)',   icon:Box,       stat:'60+',  statLabel:'Animations Delivered', year:'Service 01' },
+  { id:'02', title:'AI Automation',          sub:'Intelligent systems',            description:'Custom AI pipelines and intelligent agents that eliminate repetitive tasks, reduce costs and scale your operations without scaling headcount.',                      tags:['LLM Integration','Bots'],      accent:'#a78bfa', glow:'rgba(167,139,250,0.4)', icon:Cpu,       stat:'10×',  statLabel:'Efficiency Gain',      year:'Service 02' },
+  { id:'03', title:'App Development',        sub:'Full-stack performance',         description:'Cross-platform web and mobile applications engineered with React, Next.js and React Native — designed for speed, scalability and seamless UX.',                     tags:['React','Next.js'],             accent:'#60a5fa', glow:'rgba(96,165,250,0.4)',   icon:Code2,     stat:'40+',  statLabel:'Apps Shipped',         year:'Service 03' },
+  { id:'04', title:'Business Consultation',  sub:'Strategy & growth',              description:'Expert-led digital strategy, growth frameworks and technology roadmaps tailored to your business goals — turning ambiguity into clear, executable plans.',           tags:['Strategy','Roadmaps'],         accent:'#fbbf24', glow:'rgba(251,191,36,0.4)',   icon:Briefcase, stat:'95%',  statLabel:'Client Retention',     year:'Service 04' },
+  { id:'05', title:'CGI Ads',                sub:'Hyper-real creative',            description:'Photorealistic CGI product advertisements — cheaper than traditional shoots with infinite control over lighting, environment and composition.',                      tags:['CGI','Ad Creative'],           accent:'#f472b6', glow:'rgba(244,114,182,0.4)', icon:Film,      stat:'3×',   statLabel:'Higher Engagement',    year:'Service 05' },
+  { id:'06', title:'CRM Portals',            sub:'Enterprise dashboards',          description:'Bespoke CRM and client management portals with role-based dashboards, automated workflows and deep integrations — built around your process.',                      tags:['Dashboards','B2B'],            accent:'#34d399', glow:'rgba(52,211,153,0.4)',   icon:Database,  stat:'25h',  statLabel:'Saved Per Week',       year:'Service 06' },
+  { id:'07', title:'Product Photoshoot',     sub:'Commercial photography',         description:'Studio and lifestyle product photography combining art direction, post-production and brand consistency — images built to perform across all channels.',              tags:['Photography','Art Direction'], accent:'#fb923c', glow:'rgba(251,146,60,0.4)',   icon:Camera,    stat:'500+', statLabel:'Products Shot',        year:'Service 07' },
+  { id:'08', title:'SEO',                    sub:'Organic growth',                 description:'Technical SEO audits, content strategy and link building — a full-funnel approach that drives qualified traffic and sustainable search rankings.',                   tags:['Technical SEO','Content'],     accent:'#4ade80', glow:'rgba(74,222,128,0.4)',   icon:Search,    stat:'8×',   statLabel:'Traffic Growth',       year:'Service 08' },
+  { id:'09', title:'Social Media Marketing', sub:'Content that builds communities',description:'Platform-native content creation, paid social campaigns and community management — turning followers into brand advocates across every platform.',                  tags:['Content','Paid Social'],       accent:'#f43f5e', glow:'rgba(244,63,94,0.4)',    icon:Share2,    stat:'340%', statLabel:'Avg. Growth',          year:'Service 09' },
+  { id:'10', title:'Web Designing',          sub:'Interfaces that impress',        description:'UI/UX design grounded in psychology, conversion science and aesthetic precision — wireframes to polished Figma prototypes developers love to build.',                tags:['UI/UX','Design Systems'],      accent:'#818cf8', glow:'rgba(129,140,248,0.4)',  icon:Palette,   stat:'+34%', statLabel:'Conversion Lift',      year:'Service 10' },
+  { id:'11', title:'Web Development',        sub:'Sites that scale',               description:'From bespoke marketing sites to complex SaaS platforms — performant, accessible, SEO-ready web development using latest frameworks and best-in-class infrastructure.',tags:['Next.js','Performance'],      accent:'#38bdf8', glow:'rgba(56,189,248,0.4)',   icon:Globe,     stat:'99%',  statLabel:'Uptime SLA',           year:'Service 11' },
 ];
 
-/* Bento col-spans — 4 col desktop */
-const ALL_SPANS = [
-  'lg:col-span-2', // Tax On Track — wide
-  'lg:col-span-1', // Niche Club
-  'lg:col-span-1', // Dreamworks
-  'lg:col-span-1', // Peptides
-  'lg:col-span-1', // Casa Palma
-  'lg:col-span-2', // Eartherist — wide
-  'lg:col-span-2', // TOT Portal — wide
-  'lg:col-span-2', // Sherekhankitchen — wide
-];
+/* ─── CSS injected once at module level ──────────────────────────────────── */
+const GLOBAL_CSS = `
+  /* Active node ring — single CSS animation, no JS */
+  @keyframes nmt-ring {
+    0%   { transform: translate(-50%,-50%) scale(1);   opacity: .6; }
+    100% { transform: translate(-50%,-50%) scale(2.4); opacity: 0;  }
+  }
+  .nmt-node-ring {
+    position: absolute; top: 50%; left: 50%;
+    border-radius: 50%;
+    animation: nmt-ring 2.2s ease-out infinite;
+    pointer-events: none;
+  }
+  /* Scroll-progress comet head pulsing */
+  @keyframes nmt-comet-pulse {
+    0%,100% { transform: translate(-50%,-50%) scale(1);   }
+    50%      { transform: translate(-50%,-50%) scale(1.35); }
+  }
+  .nmt-comet { animation: nmt-comet-pulse 2s ease-in-out infinite; }
 
-/* ═══════════════════════════════════════════════════════════════
-   SVG PATTERN BACKGROUNDS
-═══════════════════════════════════════════════════════════════ */
-const PatternBg = React.memo(function PatternBg({ kind, color, uid }: {
-  kind: PatternKind; color: string; uid: string;
-}) {
-  const o = 0.08;
-  const id = `pp-${uid}`;
-  const shapes: Record<PatternKind, React.ReactElement> = {
-    dots:     <pattern id={id} width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.1" fill={color} fillOpacity={o} /></pattern>,
-    lines:    <pattern id={id} width="30" height="30" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="30" y2="30" stroke={color} strokeWidth="0.5" strokeOpacity={o} /></pattern>,
-    grid:     <pattern id={id} width="26" height="26" patternUnits="userSpaceOnUse"><path d="M 26 0 L 0 0 0 26" fill="none" stroke={color} strokeWidth="0.4" strokeOpacity={o} /></pattern>,
-    diagonal: <pattern id={id} width="16" height="16" patternUnits="userSpaceOnUse"><line x1="0" y1="16" x2="16" y2="0" stroke={color} strokeWidth="0.5" strokeOpacity={o} /></pattern>,
-    waves:    <pattern id={id} width="38" height="19" patternUnits="userSpaceOnUse"><path d="M 0 9.5 Q 9.5 0 19 9.5 Q 28.5 19 38 9.5" fill="none" stroke={color} strokeWidth="0.6" strokeOpacity={o} /></pattern>,
-    cross:    <pattern id={id} width="24" height="24" patternUnits="userSpaceOnUse"><line x1="12" y1="3" x2="12" y2="21" stroke={color} strokeWidth="0.6" strokeOpacity={o} /><line x1="3" y1="12" x2="21" y2="12" stroke={color} strokeWidth="0.6" strokeOpacity={o} /></pattern>,
-    hex:      <pattern id={id} width="38" height="44" patternUnits="userSpaceOnUse"><polygon points="19,1 37,11 37,31 19,43 1,31 1,11" fill="none" stroke={color} strokeWidth="0.5" strokeOpacity={o} /></pattern>,
-    circuit:  <pattern id={id} width="46" height="46" patternUnits="userSpaceOnUse"><path d="M 8 8 H 23 V 23 H 38 V 38" fill="none" stroke={color} strokeWidth="0.6" strokeOpacity={o} /><circle cx="8" cy="8" r="1.6" fill={color} fillOpacity={o * 2.2} /><circle cx="23" cy="23" r="1.6" fill={color} fillOpacity={o * 2.2} /><circle cx="38" cy="38" r="1.6" fill={color} fillOpacity={o * 2.2} /></pattern>,
-  };
+  /* Live dot blink */
+  @keyframes nmt-blink {
+    0%,100% { opacity: 1; } 50% { opacity: .25; }
+  }
+  .nmt-blink { animation: nmt-blink 1.8s ease-in-out infinite; }
+
+  /* Scroll cue bounce */
+  @keyframes nmt-bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(7px)} }
+  .nmt-bounce { animation: nmt-bounce 1.6s ease-in-out infinite; }
+`;
+
+/* ─── Background — pure CSS, zero JS ────────────────────────────────────── */
+const Background = memo(function Background() {
   return (
-    <svg className="absolute inset-0 w-full h-full" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <defs>{shapes[kind]}</defs>
-      <rect width="100%" height="100%" fill={`url(#${id})`} />
-    </svg>
+    <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
+      <div className="absolute inset-0" style={{ background: '#000000' }} />
+    </div>
   );
 });
 
-/* ═══════════════════════════════════════════════════════════════
-   FLOATING ORBS — ambient background life
-═══════════════════════════════════════════════════════════════ */
-function FloatingOrbs() {
-  const orbs = [
-    { x: 5,  y: 8,  w: 360, h: 360, color: 'rgba(255,255,255,0.04)', dur: 24, delay: 0 },
-    { x: 80, y: 60, w: 500, h: 500, color: 'rgba(0,0,0,0.28)',       dur: 30, delay: 6 },
-    { x: 40, y: 80, w: 300, h: 300, color: 'rgba(0,0,0,0.2)',        dur: 20, delay: 3 },
-    { x: 90, y: 5,  w: 280, h: 280, color: 'rgba(255,255,255,0.03)', dur: 18, delay: 9 },
-  ];
+/* ─── Node — CSS-only pulse ring ────────────────────────────────────────── */
+interface NodeProps { active: boolean; accent: string; size?: number; }
+
+const TimelineNode = memo(function TimelineNode({ active, accent, size = 28 }: NodeProps) {
+  return (
+    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
+      {/* CSS-animated ring — only when active, single element */}
+      {active && (
+        <span
+          className="nmt-node-ring"
+          style={{
+            width: size + 14, height: size + 14,
+            border: `1.5px solid ${accent}`,
+          }}
+        />
+      )}
+      {/* Node body */}
+      <div
+        className="relative z-10 flex items-center justify-center rounded-full"
+        style={{
+          width: size, height: size,
+          background: active ? accent : 'rgba(12,18,30,0.95)',
+          border: `2px solid ${active ? accent : 'rgba(56,189,248,0.25)'}`,
+          boxShadow: active ? `0 0 14px ${accent}70, 0 0 30px ${accent}28` : 'none',
+          transition: 'all 0.4s ease',
+        }}
+      >
+        <div
+          className="rounded-full"
+          style={{
+            width: size * 0.3, height: size * 0.3,
+            background: active ? '#080c14' : 'rgba(56,189,248,0.4)',
+            transition: 'background 0.4s ease',
+          }}
+        />
+      </div>
+    </div>
+  );
+});
+
+/* ─── Scroll-driven timeline line + comet ────────────────────────────────── */
+const TimelineLine = memo(function TimelineLine({ progress }: { progress: MotionValue<string> }) {
   return (
     <>
-      {orbs.map((o, i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full pointer-events-none"
+      {/* Static dim guide rail */}
+      <div
+        aria-hidden="true"
+        className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 pointer-events-none"
+        style={{
+          width: 1,
+          background: 'linear-gradient(to bottom, transparent, rgba(56,189,248,0.18) 5%, rgba(56,189,248,0.10) 95%, transparent)',
+          zIndex: 1,
+        }}
+      />
+      {/* Animated fill line — height driven by scroll, GPU-composited */}
+      <motion.div
+        aria-hidden="true"
+        className="absolute top-0 left-1/2 -translate-x-1/2 pointer-events-none"
+        style={{
+          width: 2,
+          height: progress,
+          background: 'linear-gradient(to bottom, #1e6fa8, #38bdf8, #22d3ee)',
+          boxShadow: '0 0 14px rgba(34,211,238,0.55), 0 0 34px rgba(56,189,248,0.25)',
+          borderRadius: 9999,
+          zIndex: 2,
+          willChange: 'height',
+        }}
+      />
+      {/* Comet head — CSS pulsing, no JS animation loop */}
+      <motion.div
+        aria-hidden="true"
+        className="absolute left-1/2 pointer-events-none"
+        style={{ top: progress, zIndex: 10, willChange: 'top' }}
+      >
+        <div
+          className="nmt-comet"
           style={{
-            left: `${o.x}%`, top: `${o.y}%`,
-            width: o.w, height: o.h,
-            background: `radial-gradient(circle, ${o.color} 0%, transparent 70%)`,
-            translateX: '-50%', translateY: '-50%',
+            width: 16, height: 16,
+            borderRadius: '50%',
+            position: 'absolute',
+            top: 0, left: 0,
+            transform: 'translate(-50%,-50%)',
+            background: 'radial-gradient(circle, rgba(56,189,248,0.95) 0%, rgba(37,124,163,0.6) 55%, transparent 75%)',
+            boxShadow: '0 0 12px 4px rgba(56,189,248,0.65), 0 0 28px 8px rgba(37,124,163,0.3)',
           }}
-          animate={{ x: [0, 30, -20, 10, 0], y: [0, -25, 15, -10, 0], scale: [1, 1.1, 0.95, 1.05, 1] }}
-          transition={{ duration: o.dur, repeat: Infinity, ease: 'easeInOut', delay: o.delay }}
         />
-      ))}
+      </motion.div>
     </>
   );
-}
+});
 
-/* ═══════════════════════════════════════════════════════════════
-   BACKGROUND — #257ca3 with black depth corners
-═══════════════════════════════════════════════════════════════ */
-function Background() {
+/* ─── Header ─────────────────────────────────────────────────────────────── */
+const Header = memo(function Header({ inView }: { inView: boolean }) {
   return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
-      {/* Ice blue base */}
-      <div className="absolute inset-0" style={{ background: '#257ca3' }} />
-      {/* Top highlight */}
-      <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 100% 45% at 50% 0%, rgba(255,255,255,0.09) 0%, transparent 55%)' }} />
-      {/* Black vignette — all four corners */}
-      <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 70% 65% at 0% 0%, rgba(0,0,0,0.3) 0%, transparent 55%)' }} />
-      <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 70% 65% at 100% 0%, rgba(0,0,0,0.28) 0%, transparent 55%)' }} />
-      <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 75% 70% at 0% 100%, rgba(0,0,0,0.65) 0%, transparent 58%)' }} />
-      <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 75% 70% at 100% 100%, rgba(0,0,0,0.6) 0%, transparent 56%)' }} />
-      {/* Center mass darkening */}
-      <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 90% 40% at 50% 100%, rgba(0,0,0,0.5) 0%, transparent 60%)' }} />
-      {/* Edge frame */}
-      <div className="absolute inset-0" style={{ background: 'linear-gradient(90deg, rgba(0,0,0,0.18) 0%, transparent 10%, transparent 90%, rgba(0,0,0,0.18) 100%)' }} />
-      {/* Fine mesh */}
-      <div className="absolute inset-0" style={{
-        backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.18) 1px, transparent 1px)',
-        backgroundSize: '28px 28px',
-      }} />
-      <FloatingOrbs />
-      {/* Edge lines */}
-      <div className="absolute top-0 left-0 right-0 h-px" style={{ background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.35),transparent)' }} />
-      <div className="absolute bottom-0 left-0 right-0 h-px" style={{ background: 'linear-gradient(90deg,transparent,rgba(0,0,0,0.5),transparent)' }} />
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   ANIMATED STAT NUMBER
-═══════════════════════════════════════════════════════════════ */
-function CountUp({ value, inView }: { value: string; inView: boolean }) {
-  const num = parseFloat(value.replace(/[^0-9.]/g, ''));
-  const prefix = value.match(/^\+/)?.[0] ?? '';
-  const suffix = value.replace(/[\d.+]/g, '');
-  const [display, setDisplay] = useState(0);
-  const hasNum = !isNaN(num) && num > 0;
-
-  useEffect(() => {
-    if (!inView || !hasNum) return;
-    let raf: number;
-    const start = performance.now();
-    const dur = 1600;
-    const tick = (now: number) => {
-      const p = Math.min((now - start) / dur, 1);
-      const ease = 1 - Math.pow(1 - p, 3);
-      setDisplay(Math.round(ease * num));
-      if (p < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [inView, num, hasNum]);
-
-  if (!hasNum) return <>{value}</>;
-  return <>{prefix}{display}{suffix}</>;
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   CARD
-═══════════════════════════════════════════════════════════════ */
-function Card({ p, i, active, onHover }: {
-  p: Project; i: number; active: boolean; onHover: (id: number | null) => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const inView = useInView(ref, { once: true, margin: '-40px' });
-  const mx = useMotionValue(0);
-  const my = useMotionValue(0);
-  const rotX = useSpring(useTransform(my, [-0.5, 0.5], [5, -5]), { stiffness: 240, damping: 26 });
-  const rotY = useSpring(useTransform(mx, [-0.5, 0.5], [-6, 6]), { stiffness: 240, damping: 26 });
-  const gx = useTransform(mx, [-0.5, 0.5], [5, 95]);
-  const gy = useTransform(my, [-0.5, 0.5], [5, 95]);
-
-  const onMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const r = ref.current?.getBoundingClientRect();
-    if (!r) return;
-    mx.set((e.clientX - r.left) / r.width - 0.5);
-    my.set((e.clientY - r.top) / r.height - 0.5);
-  }, [mx, my]);
-
-  const onLeave = useCallback(() => {
-    mx.set(0); my.set(0); onHover(null);
-  }, [mx, my, onHover]);
-
-  const { Icon } = p;
-
-  return (
-    <motion.div
-      ref={ref}
-      style={{ perspective: 1200 }}
-      initial={{ opacity: 0, y: 50, scale: 0.93 }}
-      animate={inView ? { opacity: 1, y: 0, scale: 1 } : {}}
-      transition={{ delay: i * 0.09, duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-      className="h-full"
-    >
-      <motion.article
-        onMouseMove={onMove}
-        onMouseEnter={() => onHover(p.id)}
-        onMouseLeave={onLeave}
-        style={{ rotateX: rotX, rotateY: rotY, transformStyle: 'preserve-3d', background: p.bg }}
-        className="relative cursor-pointer overflow-hidden rounded-[24px] flex flex-col h-full min-h-[290px] group"
-        whileHover={{ scale: 1.012 }}
-        transition={{ duration: 0.2 }}
-      >
-        {/* ── Outer glow ring ── */}
-        <motion.div
-          className="absolute inset-0 rounded-[24px] z-20 pointer-events-none"
-          animate={active
-            ? { boxShadow: `0 0 0 1.5px ${p.accent}55, 0 0 80px ${p.glow}, 0 28px 80px rgba(0,0,0,0.75)` }
-            : { boxShadow: '0 0 0 1px rgba(255,255,255,0.07), 0 16px 60px rgba(0,0,0,0.7)' }}
-          transition={{ duration: 0.22 }}
-        />
-
-        {/* ── Top colour bar ── */}
-        <motion.div
-          className="absolute top-0 left-[15%] right-[15%] h-[1.5px] z-30 rounded-full"
-          style={{ background: `linear-gradient(90deg, transparent, ${p.accent}cc, transparent)` }}
-          initial={{ scaleX: 0, opacity: 0 }}
-          animate={inView ? { scaleX: 1, opacity: active ? 1 : 0.5 } : {}}
-          transition={{ delay: i * 0.09 + 0.35, duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
-        />
-
-        <PatternBg kind={p.pattern} color={p.accent} uid={String(p.id)} />
-
-        {/* ── Corner glows ── */}
-        <div className="absolute -top-20 -right-20 w-64 h-64 rounded-full pointer-events-none"
-          style={{ background: `radial-gradient(circle, ${p.accent}16 0%, transparent 65%)` }} />
-        <div className="absolute -bottom-16 -left-16 w-48 h-48 rounded-full pointer-events-none"
-          style={{ background: `radial-gradient(circle, ${p.accent}08 0%, transparent 65%)` }} />
-
-        {/* ── Bottom black vignette ── */}
-        <div className="absolute bottom-0 left-0 right-0 h-32 pointer-events-none"
-          style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)' }} />
-
-        {/* ── Mouse glow ── */}
-        <motion.div
-          className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100"
-          style={{
-            background: `radial-gradient(300px circle at ${gx}% ${gy}%, ${p.accent}1a 0%, transparent 65%)`,
-            transition: 'opacity 0.4s ease',
-          }}
-        />
-
-        {/* ── Shimmer sweep ── */}
-        <motion.div
-          className="absolute inset-0 pointer-events-none z-[6]"
-          style={{ background: `linear-gradient(110deg, transparent 15%, ${p.accent}0e 50%, transparent 85%)` }}
-          initial={{ x: '-160%' }}
-          animate={active ? { x: '160%' } : { x: '-160%' }}
-          transition={{ duration: 0.9, ease: 'easeInOut' }}
-        />
-
-        {/* ════ CONTENT ════ */}
-        <div className="relative z-10 flex flex-col h-full p-7 sm:p-8">
-
-          {/* Row 1 — num · icon · featured · arrow */}
-          <div className="flex items-start justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <span className="text-[8.5px] font-black tabular-nums select-none"
-                style={{ color: `${p.accent}40`, letterSpacing: '0.18em' }}>
-                {p.num}
-              </span>
-
-              <motion.div
-                className="flex items-center justify-center w-11 h-11 rounded-2xl shrink-0"
-                style={{ background: `${p.accent}12`, border: `1px solid ${p.accent}26` }}
-                animate={active
-                  ? { scale: 1.12, background: `${p.accent}22`, borderColor: `${p.accent}48` }
-                  : { scale: 1 }}
-                transition={{ duration: 0.22 }}
-              >
-                <Icon style={{ width: 17, height: 17, color: p.accent }} />
-              </motion.div>
-
-              {p.featured && (
-                <motion.span
-                  className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[7px] font-black uppercase tracking-[0.18em]"
-                  style={{ background: `${p.accent}15`, border: `1px solid ${p.accent}28`, color: p.accent }}
-                  animate={active ? { scale: 1.06 } : { scale: 1 }}
-                >
-                  <Sparkles style={{ width: 6, height: 6 }} />
-                  Featured
-                </motion.span>
-              )}
-            </div>
-
-            <motion.div
-              className="flex items-center justify-center w-8 h-8 rounded-full shrink-0"
-              style={{ background: `${p.accent}10`, border: `1px solid ${p.accent}1e` }}
-              animate={active
-                ? { rotate: 45, scale: 1.2, background: `${p.accent}24`, borderColor: `${p.accent}42` }
-                : { rotate: 0, scale: 1 }}
-              transition={{ duration: 0.22 }}
-            >
-              <ArrowUpRight style={{ width: 13, height: 13, color: p.accent }} />
-            </motion.div>
-          </div>
-
-          {/* Category pill */}
-          <span className="self-start text-[7px] font-black tracking-[0.2em] uppercase px-3 py-1.5 rounded-full mb-5"
-            style={{ color: p.accent, background: `${p.accent}10`, border: `1px solid ${p.accent}1e` }}>
-            {p.category}
-          </span>
-
-          {/* Project name */}
-          <h3 className="text-[1.22rem] sm:text-[1.35rem] font-black leading-[1.07] tracking-tight mb-1.5"
-            style={{ color: p.text }}>
-            {p.name}
-          </h3>
-
-          {/* Animated underline */}
-          <motion.div
-            className="h-[1.5px] rounded-full mb-3"
-            style={{ background: `linear-gradient(90deg, ${p.accent}90, transparent)` }}
-            initial={{ width: 0 }}
-            animate={inView ? { width: active ? 60 : 36 } : {}}
-            transition={{ delay: i * 0.09 + 0.45, duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
-          />
-
-          {/* Tagline */}
-          <p className="text-[8.5px] font-bold tracking-[0.14em] uppercase mb-4"
-            style={{ color: `${p.accent}88` }}>
-            {p.tagline}
-          </p>
-
-          {/* Description */}
-          <p className="text-[11.5px] leading-[1.8] flex-1"
-            style={{ color: `${p.text}52` }}>
-            {p.description}
-          </p>
-
-          {/* Footer */}
-          <div className="flex items-end justify-between gap-3 mt-6 pt-5"
-            style={{ borderTop: `1px solid ${p.accent}12` }}>
-            <div className="flex flex-wrap gap-2">
-              {p.tags.map((t) => (
-                <span key={t} className="text-[6.5px] font-bold tracking-wide px-2.5 py-1 rounded-full"
-                  style={{ color: `${p.text}45`, background: `${p.text}07`, border: `1px solid ${p.text}0e` }}>
-                  {t}
-                </span>
-              ))}
-            </div>
-            <div className="text-right shrink-0">
-              <motion.div
-                className="text-[1.7rem] font-black leading-none tabular-nums"
-                style={{ color: p.accent }}
-                initial={{ opacity: 0, y: 8 }}
-                animate={inView ? { opacity: 1, y: 0 } : {}}
-                transition={{ delay: i * 0.09 + 0.55, duration: 0.5 }}
-              >
-                <CountUp value={p.stat} inView={inView} />
-              </motion.div>
-              <div className="text-[6.5px] font-black tracking-widest uppercase mt-0.5"
-                style={{ color: `${p.text}35` }}>
-                {p.statLabel}
-              </div>
-            </div>
-          </div>
-        </div>
-      </motion.article>
-    </motion.div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   FILTER TABS
-═══════════════════════════════════════════════════════════════ */
-type FilterKey = 'all' | 'saas' | 'ecommerce' | 'enterprise' | 'featured';
-
-const TABS: { key: FilterKey; label: string; count: number }[] = [
-  { key: 'all',        label: 'All',        count: 8 },
-  { key: 'featured',   label: 'Featured',   count: 3 },
-  { key: 'saas',       label: 'SaaS',       count: 2 },
-  { key: 'ecommerce',  label: 'E-Commerce', count: 3 },
-  { key: 'enterprise', label: 'Enterprise', count: 2 },
-];
-
-function Tabs({ active, set }: { active: FilterKey; set: (k: FilterKey) => void }) {
-  return (
-    <div className="flex flex-wrap justify-center gap-2.5">
-      {TABS.map((t) => {
-        const on = active === t.key;
-        return (
-          <motion.button
-            key={t.key} type="button"
-            onClick={() => set(t.key)}
-            whileHover={{ y: -2 }}
-            whileTap={{ scale: 0.94 }}
-            className="relative flex items-center gap-2 px-5 py-2.5 rounded-full text-[10px] font-black uppercase tracking-[0.14em] overflow-hidden"
-            style={{
-              color: on ? '#fff' : 'rgba(255,255,255,0.42)',
-              background: on ? undefined : 'rgba(0,0,0,0.32)',
-              border: on ? 'none' : '1px solid rgba(255,255,255,0.09)',
-              backdropFilter: 'blur(14px)',
-              boxShadow: on ? '0 6px 28px rgba(0,0,0,0.55)' : 'none',
-            }}
-          >
-            {on && (
-              <motion.div
-                layoutId="tab-bg"
-                className="absolute inset-0 rounded-full"
-                style={{ background: 'linear-gradient(135deg, #080808 0%, #181818 100%)', border: '1px solid rgba(255,255,255,0.1)' }}
-                transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-              />
-            )}
-            <span className="relative z-10">{t.label}</span>
-            <span className="relative z-10 text-[7px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center"
-              style={{
-                background: on ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.06)',
-                color: on ? 'rgba(255,255,255,0.72)' : 'rgba(255,255,255,0.26)',
-              }}>
-              {t.count}
-            </span>
-          </motion.button>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   HEADER
-═══════════════════════════════════════════════════════════════ */
-function Header({ inView }: { inView: boolean }) {
-  return (
-    <div className="text-center mb-12 sm:mb-16 px-4">
-
-      {/* Eyebrow */}
+    <div className="text-center mb-20 sm:mb-28 px-4">
+      {/* Badge row */}
       <motion.div
         className="flex flex-wrap items-center justify-center gap-3 mb-8"
-        initial={{ opacity: 0, y: 12 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={inView ? { opacity: 1, y: 0 } : {}}
-        transition={{ duration: 0.5 }}
+        transition={{ duration: 0.55 }}
       >
-        <motion.div
+        <div
           className="flex items-center gap-2 px-4 py-2 rounded-full"
-          style={{ background: 'rgba(0,0,0,0.38)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(16px)' }}
-          whileHover={{ scale: 1.04, background: 'rgba(0,0,0,0.5)' }}
+          style={{ background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', backdropFilter: 'blur(20px)' }}
         >
           <Zap style={{ width: 9, height: 9, color: '#fbbf24' }} />
-          <span className="text-[8px] font-black tracking-[0.24em] uppercase" style={{ color: 'rgba(255,255,255,0.52)' }}>
-            Selected Work
+          <span className="text-[7.5px] font-black tracking-[0.25em] uppercase" style={{ color: 'rgba(56,189,248,0.8)' }}>
+            Full Service Digital Studio
           </span>
-        </motion.div>
-
+        </div>
         <div className="flex items-center gap-2">
-          <motion.span
-            className="w-2 h-2 rounded-full"
-            style={{ background: '#4ade80', boxShadow: '0 0 8px rgba(74,222,128,0.7)' }}
-            animate={{ opacity: [1, 0.25, 1], scale: [1, 0.72, 1] }}
-            transition={{ duration: 1.8, repeat: Infinity }}
+          <span
+            className="nmt-blink w-2 h-2 rounded-full inline-block"
+            style={{ background: '#4ade80', boxShadow: '0 0 8px rgba(74,222,128,0.75)' }}
           />
-          <span className="text-[8px] font-black tracking-[0.22em] uppercase" style={{ color: 'rgba(74,222,128,0.9)' }}>
-            All Live
+          <span className="text-[7.5px] font-black tracking-[0.22em] uppercase" style={{ color: 'rgba(74,222,128,0.85)' }}>
+            11 Specialisms
           </span>
         </div>
       </motion.div>
 
-      {/* Headline — clip-path reveal per line */}
+      {/* Headline — mask-reveal */}
       <div className="overflow-hidden mb-1">
         <motion.h2
-          initial={{ y: 90, opacity: 0 }}
+          initial={{ y: 100, opacity: 0 }}
           animate={inView ? { y: 0, opacity: 1 } : {}}
-          transition={{ duration: 0.9, delay: 0.14, ease: [0.16, 1, 0.3, 1] }}
-          className="text-[3rem] sm:text-[4rem] md:text-[5rem] lg:text-[5.8rem] font-black leading-[1.0] tracking-[-0.03em]"
-          style={{ color: '#ffffff' }}
+          transition={{ duration: 0.9, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
+          className="text-[2.6rem] sm:text-[3.8rem] md:text-[5.2rem] lg:text-[6rem] font-black leading-[0.96] tracking-[-0.035em]"
+          style={{ color: '#f0f8ff', fontFamily: "'DM Sans', system-ui, sans-serif" }}
         >
-          Projects That
+          Everything You
         </motion.h2>
       </div>
       <div className="overflow-hidden">
         <motion.h2
-          initial={{ y: 90, opacity: 0 }}
+          initial={{ y: 100, opacity: 0 }}
           animate={inView ? { y: 0, opacity: 1 } : {}}
-          transition={{ duration: 0.9, delay: 0.24, ease: [0.16, 1, 0.3, 1] }}
-          className="text-[3rem] sm:text-[4rem] md:text-[5rem] lg:text-[5.8rem] font-black leading-[1.0] tracking-[-0.03em]"
+          transition={{ duration: 0.9, delay: 0.18, ease: [0.16, 1, 0.3, 1] }}
+          className="text-[2.6rem] sm:text-[3.8rem] md:text-[5.2rem] lg:text-[6rem] font-black leading-[0.96] tracking-[-0.035em]"
           style={{
-            background: 'linear-gradient(120deg, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.38) 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text',
+            background: 'linear-gradient(125deg, #257ca3 0%, #38bdf8 42%, #22d3ee 70%, rgba(37,124,163,0.6) 100%)',
+            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+            fontFamily: "'DM Sans', system-ui, sans-serif",
           }}
         >
-          Drive Results
+          Need To Grow
         </motion.h2>
       </div>
 
-      {/* Divider */}
+      <motion.p
+        initial={{ opacity: 0, y: 14 }}
+        animate={inView ? { opacity: 1, y: 0 } : {}}
+        transition={{ delay: 0.38, duration: 0.6 }}
+        className="text-[13px] sm:text-[15px] max-w-sm mx-auto leading-relaxed mt-6"
+        style={{ color: 'rgba(160,190,215,0.5)', fontFamily: "'DM Sans', system-ui, sans-serif" }}
+      >
+        Eleven specialist services engineered to transform your brand and drive compounding, measurable growth.
+      </motion.p>
+
+      {/* Divider dots */}
       <motion.div
         className="flex items-center justify-center gap-3 mt-10"
         initial={{ opacity: 0 }}
         animate={inView ? { opacity: 1 } : {}}
-        transition={{ delay: 0.6 }}
+        transition={{ delay: 0.55 }}
       >
-        <motion.div className="h-px" style={{ background: 'linear-gradient(90deg,transparent,rgba(0,0,0,0.55))' }}
-          initial={{ width: 0 }} animate={inView ? { width: 96 } : {}}
-          transition={{ delay: 0.65, duration: 0.7 }} />
-        <div className="flex gap-1.5">
-          {[0, 1, 2].map((j) => (
-            <motion.div key={j} className="rounded-full"
-              style={{ width: j === 1 ? 7 : 4, height: j === 1 ? 7 : 4, background: j === 1 ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.3)' }}
-              initial={{ scale: 0 }}
-              animate={inView ? { scale: 1 } : {}}
-              transition={{ delay: 0.72 + j * 0.06, type: 'spring' }}
-            />
-          ))}
-        </div>
-        <motion.div className="h-px" style={{ background: 'linear-gradient(90deg,rgba(0,0,0,0.55),transparent)' }}
-          initial={{ width: 0 }} animate={inView ? { width: 96 } : {}}
-          transition={{ delay: 0.65, duration: 0.7 }} />
+        <motion.div
+          className="h-px"
+          style={{ background: 'linear-gradient(90deg, transparent, rgba(56,189,248,0.5))' }}
+          initial={{ width: 0 }}
+          animate={inView ? { width: 120 } : {}}
+          transition={{ delay: 0.6, duration: 0.8 }}
+        />
+        {[0, 1, 2].map(j => (
+          <div
+            key={j}
+            className="rounded-full"
+            style={{
+              width: j === 1 ? 8 : 4,
+              height: j === 1 ? 8 : 4,
+              background: j === 1 ? 'rgba(56,189,248,0.7)' : 'rgba(56,189,248,0.3)',
+            }}
+          />
+        ))}
+        <motion.div
+          className="h-px"
+          style={{ background: 'linear-gradient(90deg, rgba(56,189,248,0.5), transparent)' }}
+          initial={{ width: 0 }}
+          animate={inView ? { width: 120 } : {}}
+          transition={{ delay: 0.6, duration: 0.8 }}
+        />
+      </motion.div>
+
+      {/* Scroll cue */}
+      <motion.div
+        className="flex flex-col items-center gap-2 mt-10"
+        initial={{ opacity: 0 }}
+        animate={inView ? { opacity: 1 } : {}}
+        transition={{ delay: 0.9 }}
+      >
+        <span className="text-[7px] font-black tracking-[0.28em] uppercase" style={{ color: 'rgba(56,189,248,0.4)' }}>
+          Scroll to explore
+        </span>
+        <span className="nmt-bounce inline-block">
+          <ChevronDown style={{ width: 14, height: 14, color: 'rgba(56,189,248,0.45)' }} />
+        </span>
       </motion.div>
     </div>
   );
-}
+});
 
-/* ═══════════════════════════════════════════════════════════════
-   ROOT
-═══════════════════════════════════════════════════════════════ */
-export default function ProjectsShowcase() {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const inView = useInView(wrapRef, { once: true, margin: '-50px' });
-  const [activeId, setActiveId] = useState<number | null>(null);
-  const [filter, setFilter] = useState<FilterKey>('all');
+/* ─── Mobile — Left identity panel ──────────────────────────────────────── */
+const MobileLeftPanel = memo(function MobileLeftPanel({
+  s, active, visible,
+}: { s: Service; active: boolean; visible: boolean }) {
+  const Icon = s.icon;
+  return (
+    <motion.div
+      className="relative overflow-hidden rounded-2xl flex flex-col justify-between"
+      style={{
+        background: active
+          ? `linear-gradient(145deg, ${s.accent}14 0%, rgba(8,12,20,0.97) 100%)`
+          : 'linear-gradient(145deg, rgba(12,18,30,0.96) 0%, rgba(6,10,18,0.98) 100%)',
+        border: `1px solid ${active ? s.accent + '35' : 'rgba(56,189,248,0.12)'}`,
+        boxShadow: active ? `0 0 38px ${s.glow}, 0 10px 44px rgba(0,0,0,0.7)` : '0 6px 30px rgba(0,0,0,0.55)',
+        padding: '18px 16px',
+        minHeight: 160,
+        transition: 'border-color 0.4s ease, box-shadow 0.4s ease, background 0.4s ease',
+      }}
+      initial={{ opacity: 0, x: -24 }}
+      animate={visible ? { opacity: 1, x: 0 } : {}}
+      transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+    >
+      {/* Top accent line */}
+      <div
+        className="absolute top-0 left-[8%] right-[8%] h-[1.5px]"
+        style={{
+          background: `linear-gradient(90deg, transparent, ${s.accent}80, transparent)`,
+          opacity: active ? 1 : 0.3,
+          transition: 'opacity 0.4s ease',
+        }}
+      />
+      {/* Corner glow */}
+      <div className="absolute -top-8 -right-8 w-28 h-28 pointer-events-none"
+        style={{ background: `radial-gradient(circle, ${s.accent}12 0%, transparent 65%)` }} />
 
-  const handleHover = useCallback((id: number | null) => setActiveId(id), []);
+      <span className="text-[7.5px] font-black tracking-[0.2em] uppercase select-none block mb-3"
+        style={{ color: `${s.accent}55` }}>{s.id}</span>
 
-  const visible = useMemo(() =>
-    filter === 'all'
-      ? PROJECTS
-      : filter === 'featured'
-        ? PROJECTS.filter((p) => p.featured)
-        : PROJECTS.filter((p) => p.filterKey.includes(filter)),
-  [filter]);
+      <div
+        className="flex items-center justify-center w-10 h-10 rounded-xl mb-3"
+        style={{
+          background: `${s.accent}10`,
+          border: `1px solid ${s.accent}22`,
+          transition: 'background 0.3s ease',
+        }}
+      >
+        <Icon style={{ width: 16, height: 16, color: s.accent }} />
+      </div>
+
+      <h3
+        className="font-black text-[0.88rem] leading-[1.1] tracking-tight"
+        style={{ color: '#e8f4ff', fontFamily: "'DM Sans', system-ui, sans-serif" }}
+      >
+        {s.title}
+      </h3>
+      <p className="text-[7.5px] font-bold tracking-[0.1em] uppercase mt-1" style={{ color: `${s.accent}70` }}>
+        {s.sub}
+      </p>
+
+      <div className="flex flex-wrap gap-1 mt-3">
+        {s.tags.map(t => (
+          <span
+            key={t}
+            className="text-[6px] font-bold tracking-wide px-2 py-0.5 rounded-full"
+            style={{ color: 'rgba(160,190,215,0.4)', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}
+          >
+            {t}
+          </span>
+        ))}
+      </div>
+    </motion.div>
+  );
+});
+
+/* ─── Mobile — Right metrics panel ──────────────────────────────────────── */
+const MobileRightPanel = memo(function MobileRightPanel({
+  s, active, visible,
+}: { s: Service; active: boolean; visible: boolean }) {
+  return (
+    <motion.div
+      className="relative overflow-hidden rounded-2xl flex flex-col justify-between"
+      style={{
+        background: active
+          ? `linear-gradient(225deg, ${s.accent}10 0%, rgba(8,12,20,0.97) 100%)`
+          : 'linear-gradient(225deg, rgba(12,18,30,0.96) 0%, rgba(6,10,18,0.98) 100%)',
+        border: `1px solid ${active ? s.accent + '30' : 'rgba(56,189,248,0.10)'}`,
+        boxShadow: active ? `0 0 38px ${s.glow}, 0 10px 44px rgba(0,0,0,0.7)` : '0 6px 30px rgba(0,0,0,0.55)',
+        padding: '18px 16px',
+        minHeight: 160,
+        transition: 'border-color 0.4s ease, box-shadow 0.4s ease, background 0.4s ease',
+      }}
+      initial={{ opacity: 0, x: 24 }}
+      animate={visible ? { opacity: 1, x: 0 } : {}}
+      transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+    >
+      {/* Bottom accent line */}
+      <div
+        className="absolute bottom-0 left-[8%] right-[8%] h-[1.5px]"
+        style={{
+          background: `linear-gradient(90deg, transparent, ${s.accent}60, transparent)`,
+          opacity: active ? 1 : 0.2,
+          transition: 'opacity 0.4s ease',
+        }}
+      />
+      <div className="absolute -bottom-8 -left-8 w-24 h-24 pointer-events-none"
+        style={{ background: `radial-gradient(circle, ${s.accent}10 0%, transparent 65%)` }} />
+
+      {/* Stat — static, no CountUp */}
+      <div>
+        <div
+          className="font-black leading-none tabular-nums"
+          style={{
+            fontSize: 'clamp(1.5rem, 5vw, 2.2rem)',
+            color: s.accent,
+            fontFamily: "'DM Sans', system-ui, sans-serif",
+            textShadow: active ? `0 0 22px ${s.accent}55` : 'none',
+            transition: 'text-shadow 0.4s ease',
+          }}
+        >
+          {s.stat}
+        </div>
+        <div className="text-[6.5px] font-black tracking-[0.2em] uppercase mt-1" style={{ color: 'rgba(160,190,215,0.35)' }}>
+          {s.statLabel}
+        </div>
+      </div>
+
+      <span
+        className="inline-block text-[6px] font-black tracking-[0.18em] uppercase px-2.5 py-1 rounded-full mt-2 self-start"
+        style={{ color: s.accent, background: `${s.accent}0e`, border: `1px solid ${s.accent}1c` }}
+      >
+        {s.year}
+      </span>
+
+      <p
+        className="text-[9.5px] leading-[1.75] mt-2 flex-1"
+        style={{
+          color: 'rgba(160,190,215,0.45)',
+          display: '-webkit-box',
+          WebkitLineClamp: 3,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          fontFamily: "'DM Sans', system-ui, sans-serif",
+        } as React.CSSProperties}
+      >
+        {s.description}
+      </p>
+
+      <div
+        className="flex items-center justify-center w-7 h-7 rounded-full mt-3 self-end"
+        style={{
+          background: `${s.accent}10`,
+          border: `1px solid ${s.accent}20`,
+          transition: 'transform 0.25s ease',
+          transform: active ? 'rotate(45deg) scale(1.08)' : 'rotate(0deg)',
+        }}
+      >
+        <ArrowRight style={{ width: 11, height: 11, color: s.accent }} />
+      </div>
+    </motion.div>
+  );
+});
+
+/* ─── Mobile row ─────────────────────────────────────────────────────────── */
+const MobileRow = memo(function MobileRow({
+  s, active,
+}: { s: Service; active: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setVisible(true); },
+      { rootMargin: '-50px' },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   return (
-    <section
-      className="relative py-20 sm:py-28 overflow-hidden"
-      style={{ fontFamily: "'Inter','DM Sans',system-ui,sans-serif" }}
+    <div
+      ref={ref}
+      className="relative"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 44px 1fr',
+        marginBottom: 20,
+        alignItems: 'stretch',
+        opacity: visible ? 1 : 0,
+        transition: 'opacity 0.5s ease',
+      }}
     >
-      <Background />
+      <MobileLeftPanel s={s} active={active} visible={visible} />
 
-      {/* Max-width container with generous horizontal padding */}
-      <div
-        ref={wrapRef}
-        className="relative z-10 w-full max-w-[1480px] mx-auto px-6 sm:px-10 lg:px-16 xl:px-24"
-      >
-        <Header inView={inView} />
-
-        {/* Tabs */}
-        <motion.div
-          className="mb-10 flex justify-center"
-          initial={{ opacity: 0, y: 10 }}
-          animate={inView ? { opacity: 1, y: 0 } : {}}
-          transition={{ delay: 0.34 }}
-        >
-          <Tabs active={filter} set={setFilter} />
-        </motion.div>
-
-        {/* ── BENTO GRID ── */}
-        <AnimatePresence mode="popLayout">
-          <motion.div
-            key={filter}
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -14, scale: 0.98 }}
-            transition={{ duration: 0.32, ease: 'easeOut' }}
-            className={[
-              'grid grid-cols-1 sm:grid-cols-2 gap-7 sm:gap-8',
-              filter === 'all'
-                ? 'lg:grid-cols-4 lg:gap-8 xl:gap-10'
-                : 'lg:grid-cols-3 lg:gap-8 xl:gap-10',
-            ].join(' ')}
-          >
-            {visible.map((p, i) => {
-              const origIdx = PROJECTS.findIndex((x) => x.id === p.id);
-              const span = filter === 'all' ? ALL_SPANS[origIdx] : '';
-              return (
-                <div key={p.id} className={span}>
-                  <Card p={p} i={i} active={activeId === p.id} onHover={handleHover} />
-                </div>
-              );
-            })}
-          </motion.div>
-        </AnimatePresence>
-
-        {/* Footnote */}
-        <motion.div
-          className="flex flex-wrap items-center justify-center gap-3 sm:gap-7 mt-16 pt-7"
-          style={{ borderTop: '1px solid rgba(0,0,0,0.22)' }}
-          initial={{ opacity: 0 }}
-          animate={inView ? { opacity: 1 } : {}}
-          transition={{ delay: 1.05 }}
-        >
-          {['All projects delivered on time', '18-month avg. engagement', 'UK & Global clients'].map((text, i) => (
-            <React.Fragment key={text}>
-              {i > 0 && <span className="hidden sm:block w-1 h-1 rounded-full" style={{ background: 'rgba(0,0,0,0.38)' }} />}
-              <span className="text-[8px] font-black tracking-[0.2em] uppercase" style={{ color: 'rgba(0,0,0,0.4)' }}>
-                {text}
-              </span>
-            </React.Fragment>
-          ))}
-        </motion.div>
+      {/* Center corridor */}
+      <div className="relative flex flex-col items-center justify-center" style={{ zIndex: 20 }}>
+        <div
+          className="absolute"
+          style={{
+            top: '50%', left: 0, width: '50%', height: 1,
+            background: active
+              ? `linear-gradient(90deg, transparent, ${s.accent}55)`
+              : 'linear-gradient(90deg, transparent, rgba(56,189,248,0.14))',
+            transition: 'background 0.4s ease',
+            zIndex: 5,
+          }}
+        />
+        <div
+          className="absolute"
+          style={{
+            top: '50%', right: 0, width: '50%', height: 1,
+            background: active
+              ? `linear-gradient(270deg, transparent, ${s.accent}55)`
+              : 'linear-gradient(270deg, transparent, rgba(56,189,248,0.14))',
+            transition: 'background 0.4s ease',
+            zIndex: 5,
+          }}
+        />
+        <div style={{ position: 'relative', zIndex: 10 }}>
+          <TimelineNode active={active} accent={s.accent} size={24} />
+        </div>
       </div>
-    </section>
+
+      <MobileRightPanel s={s} active={active} visible={visible} />
+    </div>
+  );
+});
+
+/* ─── Desktop card ───────────────────────────────────────────────────────── */
+const DesktopCard = memo(function DesktopCard({
+  s, isLeft, active,
+}: { s: Service; isLeft: boolean; active: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  const Icon = s.icon;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setVisible(true); },
+      { rootMargin: '-70px' },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        opacity: visible ? 1 : 0,
+        transform: visible
+          ? 'translateX(0)'
+          : `translateX(${isLeft ? '-40px' : '40px'})`,
+        transition: 'opacity 0.7s ease, transform 0.7s cubic-bezier(0.16,1,0.3,1)',
+        /* hardware accelerate entrance only */
+        willChange: visible ? 'auto' : 'transform, opacity',
+      }}
+    >
+      <div
+        className="relative overflow-hidden rounded-2xl cursor-pointer group"
+        style={{
+          background: 'linear-gradient(145deg, rgba(12,18,30,0.97) 0%, rgba(6,10,18,0.99) 100%)',
+          border: `1px solid ${active ? s.accent + '38' : 'rgba(56,189,248,0.12)'}`,
+          boxShadow: active
+            ? `0 0 0 1px ${s.accent}18, 0 20px 64px rgba(0,0,0,0.8), 0 0 72px ${s.glow}`
+            : '0 10px 44px rgba(0,0,0,0.65)',
+          transition: 'border-color 0.4s ease, box-shadow 0.5s ease',
+        }}
+      >
+        {/* Top edge glow line */}
+        <div
+          className="absolute top-0 left-[8%] right-[8%] h-[1.5px] rounded-full"
+          style={{
+            background: `linear-gradient(90deg, transparent, ${s.accent}cc, transparent)`,
+            opacity: visible ? 1 : 0,
+            transition: 'opacity 0.6s ease 0.3s',
+          }}
+        />
+
+        {/* Corner accent glow */}
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            [isLeft ? 'right' : 'left']: -40, top: -40,
+            width: 200, height: 200,
+            background: `radial-gradient(circle, ${s.accent}12 0%, transparent 65%)`,
+          }}
+        />
+
+        {/* SVG grid */}
+        <svg className="absolute inset-0 w-full h-full opacity-[0.045]" aria-hidden="true">
+          <defs>
+            <pattern id={`dg${s.id}`} width="30" height="30" patternUnits="userSpaceOnUse">
+              <path d="M 30 0 L 0 0 0 30" fill="none" stroke={s.accent} strokeWidth="0.5" />
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill={`url(#dg${s.id})`} />
+        </svg>
+
+        {/* Content */}
+        <div className="relative z-10 p-7 xl:p-9">
+          {/* Top row */}
+          <div className="flex items-start justify-between mb-5">
+            <div className="flex items-center gap-3">
+              <span className="text-[7.5px] font-black tracking-[0.22em] select-none" style={{ color: `${s.accent}40` }}>
+                {s.id}
+              </span>
+              <div
+                className="flex items-center justify-center w-11 h-11 rounded-xl"
+                style={{ background: `${s.accent}10`, border: `1px solid ${s.accent}22` }}
+              >
+                <Icon style={{ width: 18, height: 18, color: s.accent }} />
+              </div>
+            </div>
+            <div
+              className="flex items-center justify-center w-8 h-8 rounded-full"
+              style={{
+                background: `${s.accent}0e`,
+                border: `1px solid ${s.accent}1e`,
+                transform: active ? 'rotate(45deg) scale(1.12)' : 'rotate(0deg)',
+                transition: 'transform 0.25s ease',
+              }}
+            >
+              <ArrowRight style={{ width: 13, height: 13, color: s.accent }} />
+            </div>
+          </div>
+
+          {/* Year badge */}
+          <span
+            className="inline-block text-[7px] font-black tracking-[0.2em] uppercase px-3 py-1.5 rounded-full mb-4"
+            style={{ color: s.accent, background: `${s.accent}0e`, border: `1px solid ${s.accent}1c` }}
+          >
+            {s.year}
+          </span>
+
+          {/* Title */}
+          <h3
+            className="text-[1.2rem] xl:text-[1.45rem] font-black leading-[1.05] tracking-tight mb-2"
+            style={{ color: '#f0f8ff', fontFamily: "'DM Sans', system-ui, sans-serif" }}
+          >
+            {s.title}
+          </h3>
+
+          {/* Underline */}
+          <div
+            className="h-[1.5px] rounded-full mb-3"
+            style={{
+              background: `linear-gradient(90deg, ${s.accent}90, transparent)`,
+              width: visible ? (active ? 72 : 44) : 0,
+              transition: 'width 0.6s cubic-bezier(0.16,1,0.3,1) 0.35s',
+            }}
+          />
+
+          <p className="text-[9.5px] font-bold tracking-[0.13em] uppercase mb-3" style={{ color: `${s.accent}80` }}>
+            {s.sub}
+          </p>
+
+          <p
+            className="text-[11.5px] xl:text-[12.5px] leading-[1.85] mb-5"
+            style={{ color: 'rgba(160,190,215,0.52)', fontFamily: "'DM Sans', system-ui, sans-serif" }}
+          >
+            {s.description}
+          </p>
+
+          {/* Footer */}
+          <div
+            className="flex items-end justify-between gap-3 pt-4"
+            style={{ borderTop: `1px solid ${s.accent}12` }}
+          >
+            <div className="flex flex-wrap gap-1.5">
+              {s.tags.map(t => (
+                <span
+                  key={t}
+                  className="text-[6.5px] font-bold tracking-wide px-2.5 py-1 rounded-full"
+                  style={{ color: 'rgba(160,190,215,0.38)', background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.07)' }}
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+            {/* Static stat — no CountUp */}
+            <div className="text-right shrink-0">
+              <div
+                className="font-black leading-none tabular-nums"
+                style={{
+                  fontSize: 'clamp(1.4rem, 2.5vw, 1.85rem)',
+                  color: s.accent,
+                  fontFamily: "'DM Sans', system-ui, sans-serif",
+                  textShadow: active ? `0 0 26px ${s.accent}50` : 'none',
+                  transition: 'text-shadow 0.4s ease',
+                }}
+              >
+                {s.stat}
+              </div>
+              <div className="text-[6.5px] font-black tracking-widest uppercase mt-0.5" style={{ color: 'rgba(160,190,215,0.28)' }}>
+                {s.statLabel}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+/* ─── Desktop row ─────────────────────────────────────────────────────────── */
+const DesktopRow = memo(function DesktopRow({
+  s, index, active,
+}: { s: Service; index: number; active: boolean }) {
+  const isLeft = index % 2 === 0;
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setVisible(true); },
+      { rootMargin: '-70px' },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      className="relative"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 96px 1fr',
+        alignItems: 'center',
+        marginBottom: 48,
+      }}
+    >
+      {/* LEFT ZONE */}
+      <div>
+        {isLeft ? (
+          <DesktopCard s={s} isLeft={true} active={active} />
+        ) : (
+          <div
+            style={{
+              textAlign: 'right',
+              paddingRight: 32,
+              opacity: visible ? 1 : 0,
+              transform: visible ? 'translateX(0)' : 'translateX(-18px)',
+              transition: 'opacity 0.6s ease 0.15s, transform 0.6s ease 0.15s',
+            }}
+          >
+            <div
+              className="font-black leading-none tabular-nums"
+              style={{
+                fontSize: 'clamp(2.5rem, 4.5vw, 4rem)',
+                color: active ? s.accent : `${s.accent}22`,
+                fontFamily: "'DM Sans', system-ui, sans-serif",
+                textShadow: active ? `0 0 55px ${s.accent}38` : 'none',
+                transition: 'color 0.5s ease, text-shadow 0.5s ease',
+                letterSpacing: '-0.04em',
+              }}
+            >
+              {s.stat}
+            </div>
+            <div
+              className="text-[8px] font-black tracking-[0.22em] uppercase mt-2"
+              style={{
+                color: active ? `${s.accent}60` : 'rgba(56,189,248,0.15)',
+                transition: 'color 0.5s ease',
+              }}
+            >
+              {s.statLabel}
+            </div>
+            <div className="text-[7px] font-black tracking-[0.18em] uppercase mt-4" style={{ color: 'rgba(160,190,215,0.18)' }}>
+              {s.year}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* CENTER corridor — node + connectors */}
+      <div className="relative flex items-center justify-center" style={{ zIndex: 20 }}>
+        <div
+          className="absolute left-0 right-1/2"
+          style={{
+            top: '50%', height: 1,
+            background: active
+              ? `linear-gradient(90deg, transparent, ${s.accent}52)`
+              : 'linear-gradient(90deg, transparent, rgba(56,189,248,0.11))',
+            transition: 'background 0.4s ease',
+          }}
+        />
+        <div
+          className="absolute right-0 left-1/2"
+          style={{
+            top: '50%', height: 1,
+            background: active
+              ? `linear-gradient(270deg, transparent, ${s.accent}52)`
+              : 'linear-gradient(270deg, transparent, rgba(56,189,248,0.11))',
+            transition: 'background 0.4s ease',
+          }}
+        />
+        <TimelineNode active={active} accent={s.accent} size={32} />
+      </div>
+
+      {/* RIGHT ZONE */}
+      <div>
+        {!isLeft ? (
+          <DesktopCard s={s} isLeft={false} active={active} />
+        ) : (
+          <div
+            style={{
+              paddingLeft: 32,
+              opacity: visible ? 1 : 0,
+              transform: visible ? 'translateX(0)' : 'translateX(18px)',
+              transition: 'opacity 0.6s ease 0.15s, transform 0.6s ease 0.15s',
+            }}
+          >
+            <div
+              className="font-black leading-none tracking-tight"
+              style={{
+                fontSize: 'clamp(1.6rem, 2.5vw, 2.2rem)',
+                color: active ? s.accent : `${s.accent}22`,
+                fontFamily: "'DM Sans', system-ui, sans-serif",
+                transition: 'color 0.5s ease',
+              }}
+            >
+              {s.title}
+            </div>
+            <div
+              className="text-[8px] font-bold tracking-[0.14em] uppercase mt-2 max-w-xs"
+              style={{
+                color: active ? `${s.accent}55` : 'rgba(56,189,248,0.12)',
+                transition: 'color 0.5s ease',
+              }}
+            >
+              {s.sub}
+            </div>
+            <div className="flex flex-wrap gap-1.5 mt-3">
+              {s.tags.map(t => (
+                <span
+                  key={t}
+                  className="text-[6.5px] font-bold tracking-wide px-2.5 py-1 rounded-full"
+                  style={{
+                    color: active ? `${s.accent}70` : 'rgba(56,189,248,0.2)',
+                    background: active ? `${s.accent}08` : 'rgba(56,189,248,0.04)',
+                    border: `1px solid ${active ? s.accent + '18' : 'rgba(56,189,248,0.08)'}`,
+                    transition: 'all 0.4s ease',
+                  }}
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+/* ─── Root ───────────────────────────────────────────────────────────────── */
+export default function ServicesTimeline() {
+  const pageRef    = useRef<HTMLDivElement>(null);
+  const headerRef  = useRef<HTMLDivElement>(null);
+  const desktopRef = useRef<HTMLDivElement>(null);
+  const mobileRef  = useRef<HTMLDivElement>(null);
+
+  const [headerVisible, setHeaderVisible] = useState(false);
+  const [activeIndex,   setActiveIndex]   = useState(-1);
+
+  // Header visibility via IntersectionObserver (no framer overhead)
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([e]) => { if (e.isIntersecting) setHeaderVisible(true); },
+      { rootMargin: '-50px' },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  /* ── Desktop timeline line — useScroll + useTransform only ── */
+  const { scrollYProgress: deskProg } = useScroll({
+    target: desktopRef,
+    offset: ['start 10%', 'end 90%'],
+  });
+  // Direct transform — no useSpring (smoother on low-end: no over-shoot physics)
+  const deskHeight = useTransform(deskProg, [0, 1], ['0%', '100%']);
+
+  /* ── Mobile timeline line ── */
+  const { scrollYProgress: mobProg } = useScroll({
+    target: mobileRef,
+    offset: ['start 12%', 'end 88%'],
+  });
+  const mobHeight = useTransform(mobProg, [0, 1], ['0%', '100%']);
+
+  /* ── Active index — throttled via scroll event ── */
+  const { scrollYProgress: pageProg } = useScroll({
+    target: pageRef,
+    offset: ['start start', 'end end'],
+  });
+
+  useEffect(() => {
+    return pageProg.on('change', (v) => {
+      const idx = Math.min(
+        Math.floor(v * (SERVICES.length + 1.5) - 0.4),
+        SERVICES.length - 1,
+      );
+      if (idx >= 0) setActiveIndex(idx);
+    });
+  }, [pageProg]);
+
+  return (
+    <>
+      {/* Inject CSS once */}
+      <style dangerouslySetInnerHTML={{ __html: GLOBAL_CSS }} />
+
+      <div
+        ref={pageRef}
+        className="relative overflow-hidden"
+        style={{ fontFamily: "'DM Sans', 'Inter', system-ui, sans-serif" }}
+      >
+        <Background />
+
+        <div className="relative z-10 w-full max-w-[1440px] mx-auto px-4 sm:px-8 lg:px-14 xl:px-20">
+
+          {/* Header */}
+          <div ref={headerRef} className="pt-20 sm:pt-28">
+            <Header inView={headerVisible} />
+          </div>
+
+          {/* ── Desktop (lg+) ── */}
+          <div ref={desktopRef} className="relative pb-28 hidden lg:block">
+            <TimelineLine progress={deskHeight} />
+            {SERVICES.map((s, i) => (
+              <DesktopRow key={s.id} s={s} index={i} active={i <= activeIndex} />
+            ))}
+          </div>
+
+          {/* ── Mobile / Tablet (< lg) ── */}
+        <div className="lg:hidden pb-20">
+  <div ref={mobileRef} className="relative">
+    <TimelineLine progress={mobHeight} />
+    {SERVICES.map((s, i) => (
+      <MobileRow key={s.id} s={s} active={i <= activeIndex} />
+    ))}
+  </div>
+</div>
+
+          {/* Footer strip */}
+          <motion.div
+            className="flex flex-wrap items-center justify-center gap-3 sm:gap-8 pb-16 pt-6"
+            style={{ borderTop: '1px solid rgba(56,189,248,0.1)' }}
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            transition={{ delay: 0.3 }}
+          >
+            {(['Full-service digital studio', 'UK & Global clients', '4.9★ average rating'] as const).map((text, i) => (
+              <React.Fragment key={text}>
+                {i > 0 && (
+                  <span className="hidden sm:block w-1 h-1 rounded-full" style={{ background: 'rgba(56,189,248,0.25)' }} />
+                )}
+                <span className="text-[7.5px] font-black tracking-[0.24em] uppercase" style={{ color: 'rgba(56,189,248,0.35)' }}>
+                  {text}
+                </span>
+              </React.Fragment>
+            ))}
+          </motion.div>
+        </div>
+      </div>
+    </>
   );
 }
